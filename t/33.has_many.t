@@ -1,0 +1,42 @@
+
+
+use strict;
+use warnings;
+
+use Test::More qw(no_plan);
+use Test::Exception;
+
+if ( ! require DBD::SQLite2 ) 
+{
+    plan skip_all => "Couldn't load DBD::SQLite2";
+}
+
+#plan tests => 5;
+
+use DBI::Test; 
+
+
+$ENV{REQUEST_METHOD} = 'GET';
+$ENV{QUERY_STRING}   = 'id=1&_submitted=1';
+
+my $dbaird = Person->retrieve( 1 );
+
+my $data = { street => 'NiceStreet',
+             name   => 'DaveBaird',
+             town   => 'Trumpton',
+             toys    => [ qw( 1 2 3 ) ],
+             };        
+
+my $obj_data = { map { $_ => $dbaird->$_ || undef } keys %$data };
+$obj_data->{toys} = [ map { $_->id } $dbaird->toys ];
+is_deeply( $obj_data, $data );
+
+my $form = $dbaird->as_form( selectnum => 2 );
+
+my $html = $form->render;
+
+like( $html, qr(<select id="toys" multiple="multiple" name="toys"><option selected="selected" value="1">RedCar</option><option selected="selected" value="2">BlueBug</option><option selected="selected" value="3">GreenBlock</option><option value="4">YellowSub</option></select>), 'finding has_many rels' );
+
+
+
+
