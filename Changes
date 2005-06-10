@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.11   Fri  10 Jun, 2005 12:00
+        - POD fixes
+
 0.1    Thur  9 Jun, 2005 22:45
         First version, released on an unsuspecting world.
 

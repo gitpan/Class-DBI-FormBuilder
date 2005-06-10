@@ -11,7 +11,7 @@ use CGI::FormBuilder; # 3;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = 0.1;
+our $VERSION = 0.11;
 
 sub import
 {
@@ -63,7 +63,8 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     use base 'Class::DBI';
     use Class::DBI::FormBuilder;
     
-    Film->form_builder_defaults( { smartness => 3 } );
+    # POST all forms to server
+    Film->form_builder_defaults( { method => 'post' } );
     
     # These fields must always be submitted for create/update routines
     Film->columns( Required => qw( foo bar ) );
@@ -116,7 +117,7 @@ This module creates a L<CGI::FormBuilder|CGI::FormBuilder> form from a CDBI clas
 from an object, it populates the form fields with the object's values. 
 
 Column metadata and CDBI relationships are analyzed and the fields of the form are modified accordingly. 
-For instance, MySQL C<enum> and C<set> columns are configured as C<select>, <radiobutton> or 
+For instance, MySQL C<enum> and C<set> columns are configured as C<select>, C<radiobutton> or 
 C<checkbox> widgets as appropriate, and appropriate widgets are built for C<has_a>, C<has_many> 
 and C<might_have> relationships. Further relationships can be handled by subclassing.
 
@@ -131,7 +132,7 @@ All the methods described here are exported into the caller's namespace, except 
 
 =item form_builder_defaults( %args )
 
-Set default arguments for the call to C<CGI::FormBuilder::new()>.
+Stores default arguments for the call to C<CGI::FormBuilder::new()>.
 
 =item as_form( %args )
 
@@ -255,9 +256,10 @@ sub search_form
 
 =head2 Form modifiers
 
-These methods use CDBI's knowledge about its columns to tweak the form to better represent 
-a CDBI object or class. They can be overridden if you have better knowledge than CDBI does. For instance, 
-C<form_options> only knows how to figure out select-type columns for MySQL databases. 
+These methods use CDBI's knowledge about its columns and table relationships to tweak the 
+form to better represent a CDBI object or class. They can be overridden if you have better 
+knowledge than CDBI does. For instance, C<form_options> only knows how to figure out 
+select-type columns for MySQL databases. 
 
 You can handle new relationship types by subclassing, and writing suitable C<form_*> methods (e.g. 
 C<form_many_many)>. Your custom methods will be automatically called on the relevant fields. 
@@ -490,19 +492,21 @@ and the following 2 methods will instead be imported as C<create_from_fb> and C<
 
 You might want to do this if you have more complex validation requirements than L<CGI::FormBuilder|CGI::FormBuilder> provides. 
 
-Currently all these methods check
+All these methods check the form like this
 
     return unless $fb->submitted && $fb->validate;
     
-but that's maybe unnecessary, since you'll already check that before deciding whether to 
-call these methods. 
+which allows you to say things like
+
+    print Film->update_from_form( $form ) ? $form->confirm : $form->render;
+    
+That's pretty concise!
 
 =over 4
 
 =item create_from_form( $form )
 
-Validates submitted data and creates and returns a new object if validation was successful. 
-Returns false if validation fails.
+Creates and returns a new object.
 
 =cut
 
@@ -559,11 +563,11 @@ sub _run_create
 
 =item update_from_form( $form )
 
-Validates submitted data and updates the CDBI object. 
+Updates an existing CDBI object. 
 
 If called on an object, will update that object.
 
-If called on a class, will first retrieve the relevant object (via C<retrieve_from_form>.
+If called on a class, will first retrieve the relevant object (via C<retrieve_from_form>).
 
 =cut
 
@@ -838,6 +842,9 @@ sub _run_find_or_create_from_form
 
 Attempts to look up an object. If none exists, a new object is created. 
 
+This is similar to C<update_or_create_from_form>, except that this method will not 
+update pre-existing objects. 
+
 =cut
 
 sub retrieve_or_create_from_form
@@ -891,8 +898,6 @@ C<bug-class-dbi-plugin-formbuilder@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Class-DBI-Plugin-FormBuilder>.
 I will be notified, and then you'll automatically be notified of progress on
 your bug as I make changes.
-
-=head1 ACKNOWLEDGEMENTS
 
 =head1 COPYRIGHT & LICENSE
 
