@@ -11,7 +11,7 @@ use CGI::FormBuilder; # 3;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = 0.11;
+our $VERSION = 0.12;
 
 sub import
 {
@@ -386,19 +386,21 @@ sub form_has_many
     
     my @extras = keys %$meta;
     
+    my %allowed = map { $_ => 1 } @{ $form->{__cdbi_original_args__}->{fields} || [ @extras ] };
+    
+    my @wanted = grep { $allowed{ $_ } } @extras;
+    
+    $form->field( name => $_, multiple => 1 ) for @wanted;    
+    
     # The target class/object ($them) does not have a column for the related class, 
     # so we need to add these to the form, then figure out their options.
     # Need to make sure and set some attribute to create the new field.
     # BUT - do not create the new field if it wasn't in the list passed in the original 
     # args, or if [] was passed in the original args. 
-    my %wanted = map { $_ => 1 } @{ $form->{__cdbi_original_args__}->{fields} || [ @extras ] };
     
-    $form->field( name => $_, multiple => 1 ) for grep { $wanted{ $_ } } @extras;    
-    
-    my $pk = $them->primary_column;
-    
-    foreach my $field ( @extras )
+    foreach my $field ( @wanted )
     {
+        # the 'next' is probably superfluous because @wanted is carefully filtered now
         $me->_set_field_options( $them, $form, $field, 'has_many' ) || next;
                       
         next unless ref( $them );
@@ -418,6 +420,50 @@ sub form_has_many
     }
 }
 
+=item form_might_have
+
+Also assumes a single primary column.
+
+=cut
+
+# this code is almost identical to form_has_many
+sub form_might_have
+{
+    my ( $me, $them, $form ) = @_;
+    
+    my $meta = $them->meta_info( 'might_have' ) || return;
+    
+    my @extras = keys %$meta;
+    
+    my %allowed = map { $_ => 1 } @{ $form->{__cdbi_original_args__}->{fields} || [ @extras ] };
+    
+    my @wanted = grep { $allowed{ $_ } } @extras;
+    
+    $form->field( name => $_, multiple => undef ) for @wanted;    
+    
+    foreach my $field ( @wanted ) 
+    {
+        # the 'next' is probably superfluous because @wanted is carefully filtered now
+        $me->_set_field_options( $them, $form, $field, 'might_have' ) || next;
+                      
+        next unless ref( $them );
+        
+        my $rel = $meta->{ $field };
+        
+        my $accessor      = $rel->accessor      || die "no accessor for $field";
+        my $related_class = $rel->foreign_class || die "no foreign_class for $field";
+        
+        my $foreign_pk = $related_class->primary_column;
+        
+        my $might_have_object = $them->$accessor;
+        my $might_have_object_id = $might_have_object ? $might_have_object->$foreign_pk : '';
+        
+        $form->field( name  => $field,
+                      value => $might_have_object_id,
+                      );
+    }
+}
+
 # note - we assume this method is only called on fields that require extra options
 #      - the field might not exist (if building a form with only some of the available
 #        fields)
@@ -432,7 +478,7 @@ sub _set_field_options
     return unless exists $form->field->{ $field };
     
     my $options = $me->_field_options( $them, $form, $field, $rel_type ) || 
-            die "No options detected for has_many field '$field'";
+            die "No options detected for $rel_type field '$field'";
             
     $form->field( name    => $field,
                   options => $options,
@@ -464,19 +510,6 @@ sub _field_options
     }
     
     return \@options;
-}
-
-=item form_might_have
-
-TODO.
-
-=cut
-
-sub form_might_have
-{
-    my ( $me, $them, $form ) = @_;
-    
-    die "form_might_have not written yet";
 }
 
 =back

@@ -33,6 +33,7 @@ my $submitted_data = { street => undef,
                        town   => '',
                        id     => undef,
                        toys    => undef,
+                       job => undef,
                        };
                        
                        

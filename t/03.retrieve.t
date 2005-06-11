@@ -30,6 +30,7 @@ use DBI::Test; # also includes Bar
                                       town   => undef,
                                       id     => 1,
                                       toys    => undef,
+                                      job => undef,
                                       } );
     
     my $obj;

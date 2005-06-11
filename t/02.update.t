@@ -35,6 +35,7 @@ use DBI::Test; # also includes Bar
                  town   => 1,
                  id     => 1,
                  toys    => undef,
+                 job => undef,
                  };
 
     my $form = Person->as_form;

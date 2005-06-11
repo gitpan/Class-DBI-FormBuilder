@@ -24,6 +24,7 @@ my $submitted_data = { street => undef,
                        town   => undef,
                        id     => undef,
                        toys    => undef,
+                       job => undef,
                        };
                        
 my $data = { street => 'DowningStreet',

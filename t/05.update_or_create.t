@@ -25,6 +25,7 @@ my $data = { street => 'NastyStreet',
              town   => 2,
              id     => undef,
              toys    => undef,
+             job => undef,
              };
 
 my $form = Person->as_form;

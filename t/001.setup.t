@@ -41,6 +41,16 @@ DBI::Test->db_Main->do("CREATE TABLE toy (
     descr text
 );");
 
+# id person jobtitle employer salary
+DBI::Test->db_Main->do("CREATE TABLE job (
+    id integer not null primary key,
+    person integer,
+    jobtitle text,
+    employer text,
+    salary integer
+);");
+
+
 my @towns = ( [ qw( Trumpton 250 150.7 160.8 PlayLand ) ],      # 1
               [ qw( Uglyton  1000000 10.2 8.3 Yuckland ) ],     # 2
               [ qw( Toonton  500 100.5 200.9 Cartoonland ) ],   # 3
@@ -57,3 +67,56 @@ foreach my $town ( @towns )
 }
 
 ok(1);
+
+
+# ----------------------------------------------------------------------------------
+
+__END__
+
+$VAR1 = {
+          'might_have' => {
+                            'job' => bless( {
+                                              'foreign_class' => 'Job',
+                                              'name' => 'might_have',
+                                              'args' => {
+                                                          'import' => [
+                                                                        'jobtitle',
+                                                                        'employer',
+                                                                        'salary'
+                                                                      ]
+                                                        },
+                                              'class' => 'Person',
+                                              'accessor' => 'job'
+                                            }, 'Class::DBI::Relationship::MightHave' )
+                          },
+          'has_a' => {
+                       'town' => bless( {
+                                          'foreign_class' => 'Town',
+                                          'name' => 'has_a',
+                                          'args' => {},
+                                          'class' => 'Person',
+                                          'accessor' => bless( {
+                                                                 '_groups' => {
+                                                                                'All' => 1
+                                                                              },
+                                                                 'name' => 'town',
+                                                                 'mutator' => 'town',
+                                                                 'placeholder' => '?',
+                                                                 'accessor' => 'town'
+                                                               }, 'Class::DBI::Column' )
+                                        }, 'Class::DBI::Relationship::HasA' )
+                     },
+          'has_many' => {
+                          'toys' => bless( {
+                                             'foreign_class' => 'Toy',
+                                             'name' => 'has_many',
+                                             'args' => {
+                                                         'mapping' => [],
+                                                         'foreign_key' => 'person',
+                                                         'order_by' => undef
+                                                       },
+                                             'class' => 'Person',
+                                             'accessor' => 'toys'
+                                           }, 'Class::DBI::Relationship::HasMany' )
+                        }
+        };

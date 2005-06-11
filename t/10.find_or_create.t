@@ -24,6 +24,7 @@ my $submitted_data = { street => 'DowningStreet',
                        town   => 4,
                        id     => undef,
                        toys    => undef,
+                       job => undef,
                        };
 
 my $form = Person->as_form;

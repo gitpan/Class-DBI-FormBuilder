@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.12   Sat  11 Jun, 2005 23:50
+        - added might_have support
+
 0.11   Fri  10 Jun, 2005 12:00
         - POD fixes
 

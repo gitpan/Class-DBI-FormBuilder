@@ -6,8 +6,17 @@
     DBI::Test->set_db("Main", "dbi:SQLite2:dbname=test.db");
 #    DBI::Test->table("test");
 }
+
+{   # might_have
+    package Job;
+    use base 'DBI::Test';
+    Job->table( 'job' );
+    Job->columns( All => qw/id person jobtitle employer salary/ );
+    Job->columns( Stringify => qw/jobtitle/ );  
+    Job->has_a( person => 'Person' );  
+}
  
-{    
+{   # has_a
     package Town;
     use base 'DBI::Test';
     Town->form_builder_defaults( { smartness => 3 } );
@@ -16,7 +25,7 @@
     Town->columns(Stringify => qw/name/);
 }
 
-{
+{   # has_many
     # this one must be declared before Person, because Person will 
     # examine the has_a in Toy when setting up its has_many toys.
     package Toy;
@@ -36,6 +45,7 @@
     Person->columns(Stringify => qw/name/);
     Person->has_a( town => 'Town' );
     Person->has_many( toys => 'Toy' );
+    Person->might_have( job => Job => qw/jobtitle employer salary/ );
 }
 
 
