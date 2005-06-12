@@ -28,6 +28,7 @@ t/30.has_a.t
 t/31.has_many.t
 t/32.has_many.t
 t/33.has_many.t
+t/34.might_have.t
 t/99.cleanup.t
 t/pod-coverage.t
 t/pod.t

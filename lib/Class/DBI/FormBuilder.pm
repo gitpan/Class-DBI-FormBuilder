@@ -11,7 +11,7 @@ use CGI::FormBuilder; # 3;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = 0.12;
+our $VERSION = 0.121;
 
 sub import
 {

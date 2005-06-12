@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.121  Sun  12 Jun, 2005 13:20
+        - included 34.might_have.t in MANIFEST
+
 0.12   Sat  11 Jun, 2005 23:50
         - added might_have support
 
