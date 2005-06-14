@@ -11,7 +11,7 @@ use CGI::FormBuilder; # 3;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = 0.121;
+our $VERSION = 0.2;
 
 sub import
 {
@@ -119,7 +119,11 @@ from an object, it populates the form fields with the object's values.
 Column metadata and CDBI relationships are analyzed and the fields of the form are modified accordingly. 
 For instance, MySQL C<enum> and C<set> columns are configured as C<select>, C<radiobutton> or 
 C<checkbox> widgets as appropriate, and appropriate widgets are built for C<has_a>, C<has_many> 
-and C<might_have> relationships. Further relationships can be handled by subclassing.
+and C<might_have> relationships. Further relationships can be added by subclassing.
+
+A demonstration app (using L<Maypole::FormBuilder|Maypole::FormBuilder>) can be viewed at 
+
+    http://beerfb.riverside-cms.co.uk
 
 =head1 METHODS
 
@@ -217,7 +221,38 @@ on a subset of the available columns. Note that you can acheive that by specifyi
     
 in the args. 
 
-TODO: various things need to be added. 
+The following search options are available:
+
+=over 4
+
+=item search_opt_cmp
+
+Allow the user to select a comparison operator by passing an arrayref:
+
+    search_opt_cmp => [ ( '=', '!=', '<', '<=', '>', '>=', 
+                          'LIKE', 'NOT LIKE', 'REGEXP', 'NOT REGEXP',
+                          'REGEXP BINARY', 'NOT REGEXP BINARY',
+                          ) ]
+    
+
+Or, transparently set the search operator in a hidden field:
+
+    search_opt_cmp => 'LIKE'
+    
+=item search_opt_order_by
+
+If true, will generate a widget to select (possibly multiple) columns to order the results by, 
+with an C<ASC> and C<DESC> option for each column.
+
+If set to an arrayref, will use that to build the widget. 
+
+    # order by any columns
+    search_opt_order_by => 1
+    
+    # or just offer a few
+    search_opt_order_by => [ 'foo', 'foo DESC', 'bar' ]
+    
+=back
 
 =cut
 
@@ -227,16 +262,6 @@ sub search_form
     
     my ( $orig, %args ) = __PACKAGE__->_get_args( $proto, @_ );
     
-    # could add these options to %args:
-    # order_by_column 
-    # order_by_direction (default ASC, alternative DESC)
-    # logic (default OR, alternative AND)
-    # case cmp convert
-    
-    # also need to look at implementing LIKE searches (% and _)
-    
-    
-    
     my $form = __PACKAGE__->_make_form( $proto, $orig, %args );
     
     # make all selects multiple
@@ -244,10 +269,54 @@ sub search_form
     {
         next unless exists $form->field->{ $field }; # this looks a bit suspect
         
-        $form->field( name     => $field,
-                      multiple => 1,
-                      ) if $field->options;
+        $field->multiple( 1 ) if $field->options;
+                      
+        $field->required( 0 );
     }   
+    
+    # ----- customise the search -----
+    # For processing a submitted form, remember that the field _must_ be added to the form 
+    # so that its submitted value can be extracted in search_where_from_form()
+    
+    # ----- order_by
+    # this must come before adding any other fields, because the list of columns 
+    # is taken from the form (not the CDBI class/object) so we match whatever 
+    # column selection happened during form construction
+    my %order_by_spec = ( name => 'search_opt_order_by',
+                          multiple => 1,
+                          );
+    
+    if ( my $order_by = delete $args{search_opt_order_by} )
+    {
+        $order_by = [ map  { $_, "$_ DESC" } 
+                      grep { $_->type ne 'hidden' } 
+                      $form->field 
+                      ] 
+                      unless ref( $order_by );
+        
+        $order_by_spec{options} = $order_by;
+    }
+
+    # ----- comparison operator    
+    my $cmp = delete( $args{search_opt_cmp} ) || '=';
+    
+    my %cmp_spec = ( name => 'search_opt_cmp' );
+    
+    if ( ref( $cmp ) )
+    {
+        $cmp_spec{options}  = $cmp;
+        $cmp_spec{value}    = $cmp->[0];
+        $cmp_spec{multiple} = undef;
+    }
+    else
+    {
+        $cmp_spec{value} = $cmp;
+        $cmp_spec{type}  = 'hidden';
+    }
+
+    $form->field( %cmp_spec );
+    
+    $form->field( %order_by_spec );    
     
     return $form;
 }
@@ -338,7 +407,8 @@ sub form_options
 
 =item form_has_a
 
-Populates a select-type widget with entries representing related objects. 
+Populates a select-type widget with entries representing related objects. Makes the field 
+required.
 
 Note that this list will be very long if there are lots of rows in the related table. 
 You may need to override this method in that case. For instance, overriding with a 
@@ -362,12 +432,16 @@ sub form_has_a
     
     foreach my $field ( @haves ) 
     {
-        $me->_set_field_options( $them, $form, $field, 'has_a' ) || next;
+        $me->_set_field_options( $them, $form, $field, 'has_a', { required => 1 } ) || next;
                       
         next unless ref( $them );
         
+        my $related_object = $them->get( $field ) || die sprintf
+            'Failed to retrieve a related object from %s has_a field %s - inconsistent db?',
+                ref( $them ), $field;
+        
         $form->field( name  => $field,
-                      value => $them->get( $field )->$pk,
+                      value => $related_object->$pk,
                       );
     }
 }
@@ -678,6 +752,18 @@ sub _run_update_or_create_from_form
     $them->create_from_form( $fb );
 }
 
+=back
+
+=head2 Search methods
+
+Note that search methods (except for C<retrieve_from_form>) will return a CDBI iterator 
+in scalar context, and a (possibly empty) list of objects in list context.
+
+All the search methods require that the submitted form should either be built using 
+C<search_form> (not C<as_form>), or should supply all C<required> (including C<has_a>) fields.
+
+=over 4
+
 =item retrieve_from_form
 
 Use primary key data in a form to retrieve a single object.
@@ -714,17 +800,6 @@ sub _run_retrieve_from_form
     return $them->retrieve( %pkdata );
 }
 
-=back
-
-=head2 Search methods
-
-Note that search methods will return a CDBI iterator in scalar context, 
-and a (possibly empty) list of objects in list context.
-
-TODO: add search modifiers (order etc.) to the search form. 
-
-=over 4
-
 =item search_from_form
 
 Lookup by column values.
@@ -743,6 +818,8 @@ sub search_from_form
 =item search_like_from_form
 
 Allows wildcard searches (% or _).
+
+Note that the submitted form should be built using C<search_form>, not C<as_form>. 
 
 =cut
 
@@ -783,9 +860,9 @@ sub _run_search_from_form
 
 sub _get_search_spec
 {
-    my ( $me, $them, $fb, $cols ) = @_;
+    my ( $me, $them, $fb, $fields ) = @_;
 
-    my @cols = $cols ? @$cols : $them->columns( 'All' );
+    my @fields = $fields ? @$fields : $them->columns( 'All' );
 
     # this would miss multiple items
     #my $formdata = $fb->fields;
@@ -801,16 +878,19 @@ sub _get_search_spec
     
     return map  { $_ => $formdata->{ $_ } } 
            grep { defined $formdata->{ $_ } } # don't search on unsubmitted fields
-           @cols;
+           @fields;
 }
 
 =item search_where_from_form
 
-This is the beginnings of an implementation. The form should be generated using 
-C<search_form> rather than C<as_form>. 
-
 L<Class::DBI::AbstractSearch|Class::DBI::AbstractSearch> must be loaded in your 
 CDBI class for this to work.
+
+If no search terms are specified, then the search 
+
+    WHERE 1 = 1
+    
+is executed (returns all rows), no matter what search operator may have been selected.
 
 =cut
 
@@ -830,18 +910,31 @@ sub _run_search_where_from_form
     
     return unless $fb->submitted && $fb->validate;
 
-    my @modifiers = qw( order_by );
-    
-    my %search_data      = $me->_get_search_spec( $them, $fb );
-    my %search_modifiers = $me->_get_search_spec( $them, $fb, \@modifiers );
+    my %search_data = $me->_get_search_spec( $them, $fb );
     
     # clean out empty fields
     do { delete( $search_data{ $_ } ) unless $search_data{ $_ } } for keys %search_data;
     
+    # these match fields added in search_form()
+    my %modifiers = ( search_opt_cmp      => 'cmp', 
+                      search_opt_order_by => 'order_by',
+                      );
+    
+    my %search_modifiers = $me->_get_search_spec( $them, $fb, [ keys %modifiers ] );
+    
+    # rename modifiers for SQL::Abstract - taking care not to autovivify entries
+    $search_modifiers{ $modifiers{ $_ } } = delete( $search_modifiers{ $_ } ) 
+        for grep { $search_modifiers{ $_ } } keys %modifiers;
+    
+    # return everything if no search terms specified
+    unless ( %search_data )
+    {
+        $search_data{1}        = 1;
+        $search_modifiers{cmp} = '=';
+    }
+    
     my @search = %search_modifiers ? ( \%search_data, \%search_modifiers ) : %search_data;
-                                       
-    #warn "RUNNING SEARCH SPEC: " . Data::Dumper::Dumper( \%search_data );
-
+    
     return $them->search_where( @search );
 }
 
@@ -912,12 +1005,9 @@ validation rules.
 
 Better merging of attributes. For instance, it'd be nice to set some field attributes 
 (e.g. size) in C<form_builder_defaults>, and not lose them when the fields list is 
-generated and added to C<%args>. This B<will> happen in a future release, so watch out 
-for changed behaviour.
+generated and added to C<%args>. 
 
-Various additions to searching generally.
-
-Store CDBI errors somewhere on the form. For instance, if Cupdate_from_form> fails because 
+Store CDBI errors somewhere on the form. For instance, if C<update_from_form> fails because 
 no object could be retrieved using the form data. 
 
 =head1 AUTHOR

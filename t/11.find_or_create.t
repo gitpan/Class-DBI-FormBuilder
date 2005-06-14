@@ -25,6 +25,8 @@ my $submitted_data = { street => undef,
                        id     => undef,
                        toys    => undef,
                        job => undef,
+                       search_opt_order_by => undef,
+                       search_opt_cmp => '=',
                        };
                        
 my $data = { street => 'DowningStreet',
@@ -34,7 +36,7 @@ my $data = { street => 'DowningStreet',
              toys    => undef,
              };                       
 
-my $form = Person->as_form;
+my $form = Person->search_form; # Person->as_form;
 
 is_deeply( scalar $form->field, $submitted_data );
 
