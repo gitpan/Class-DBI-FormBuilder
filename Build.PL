@@ -13,6 +13,7 @@ my $builder = Module::Build->new(
         'CGI::FormBuilder' => 0,
         'Class::Data::Inheritable' => 0,
         'Class::DBI' => 0,
+        'Class::DBI::Plugin::Type' => 0,
         
     },
     add_to_cleanup      => [ 'Class-DBI-FormBuilder-*' ],

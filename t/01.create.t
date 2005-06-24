@@ -24,15 +24,22 @@ use DBI::Test;
                  toys    => undef,
                  job => undef,
                  };
+                 
+    #Person->form_builder_defaults->{auto_validate}->{debug} = 2;
 
-    my $form = Person->as_form;
+    my $form = Person->as_form; # ( debug => 3 );
     
     isa_ok( $form, 'CGI::FormBuilder' );
 
     is_deeply( scalar $form->field, $data );
     
+    ok( $form->validate );
+    
+    $form->validate || warn $form->render;
+    
     my $obj;
     lives_ok { $obj = Person->create_from_form( $form ) } 'create_from_form';
+    
     isa_ok( $obj, 'Class::DBI' );
     
     my $id = $obj->id;

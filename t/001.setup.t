@@ -2,8 +2,8 @@
 use strict;
 use warnings;
 
-use Test::More qw(no_plan);
-use Test::Exception;
+use Test::More tests => 1;
+#use Test::Exception;
 
 
     

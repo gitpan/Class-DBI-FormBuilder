@@ -21,9 +21,9 @@ use DBI::Test; # also includes Bar
     # Fake an update request, and supply an id (assume first object inserted 
     # in 01.create.t has id = 1)
     $ENV{REQUEST_METHOD} = 'GET';
-    $ENV{QUERY_STRING}   = "id=1&&_submitted=1";
+    $ENV{QUERY_STRING}   = "id=1&_submitted=1";
     
-    my $form = Person->search_form; # as_form;
+    my $form = Person->as_form; # search_form; # as_form;
     
     is_deeply( scalar $form->field, { street => undef,
                                       name   => undef,
@@ -31,8 +31,8 @@ use DBI::Test; # also includes Bar
                                       id     => 1,
                                       toys    => undef,
                                       job => undef,
-                       search_opt_order_by => undef,
-                       search_opt_cmp => '=',
+                       #search_opt_order_by => undef,
+                       #search_opt_cmp => '=',
                                       } );
     
     my $obj;

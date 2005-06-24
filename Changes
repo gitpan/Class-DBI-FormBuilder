@@ -1,5 +1,9 @@
 Revision history for Class-DBI-FormBuilder
 
+0.3    Fri 24 Jun, 2005 14:20
+        - added automatic configuration of validation settings
+        - new dependency on Class::DBI::Plugin::Type
+
 0.2    Tues 14 Jun, 2005 23:10
         - added search_opt_cmp and search_opt_order_by options to search_form and 
             search_where_from_form

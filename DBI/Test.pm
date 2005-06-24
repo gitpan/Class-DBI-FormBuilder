@@ -1,6 +1,7 @@
 {
     package DBI::Test;
     use base 'Class::DBI';
+    use Class::DBI::Plugin::Type;
     use Class::DBI::FormBuilder;
     # use the db set up in 01.create.t
     DBI::Test->set_db("Main", "dbi:SQLite2:dbname=test.db");
@@ -19,7 +20,7 @@
 {   # has_a
     package Town;
     use base 'DBI::Test';
-    Town->form_builder_defaults( { smartness => 3 } );
+    #Town->form_builder_defaults( { smartness => 3 } );
     Town->table("town");
     Town->columns(All => qw/id name pop lat long country/);
     Town->columns(Stringify => qw/name/);
@@ -39,7 +40,7 @@
 {    
     package Person;
     use base 'DBI::Test';
-    Person->form_builder_defaults( { smartness => 3 } );
+    #Person->form_builder_defaults( { smartness => 3 } );
     Person->table("person");
     Person->columns(All => qw/id name town street/);
     Person->columns(Stringify => qw/name/);

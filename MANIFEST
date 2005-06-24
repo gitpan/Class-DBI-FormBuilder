@@ -29,6 +29,8 @@ t/31.has_many.t
 t/32.has_many.t
 t/33.has_many.t
 t/34.might_have.t
+t/40.auto_untaint.t
+t/41.auto_untaint.t
 t/99.cleanup.t
 t/pod-coverage.t
 t/pod.t

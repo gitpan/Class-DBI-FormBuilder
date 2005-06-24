@@ -4,14 +4,13 @@ use warnings;
 use strict;
 use Carp();
 
-# not sure if I need to insist on 3
-use CGI::FormBuilder; # 3;
+use CGI::FormBuilder 3;
 
 # C::FB sometimes gets confused when passed CDBI::Column objects as field names, 
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = 0.2;
+our $VERSION = 0.3;
 
 sub import
 {
@@ -62,6 +61,9 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     
     use base 'Class::DBI';
     use Class::DBI::FormBuilder;
+    
+    # for automatic validation setup
+    use Class::DBI::Plugin::Type;
     
     # POST all forms to server
     Film->form_builder_defaults( { method => 'post' } );
@@ -159,8 +161,26 @@ sub as_form
     
     my ( $orig, %args ) = __PACKAGE__->_get_args( $proto, @_ );
     
+    __PACKAGE__->_setup_auto_validation( $proto, \%args );
+    
     return __PACKAGE__->_make_form( $proto, $orig, %args );
 }
+
+=for info
+
+It's impossible to know whether pk data are expected in the submitted data or not. For instance, 
+while processing a form submission:
+    
+    my $form = My::Class->as_form;
+    
+    my $obj = My::Class->retrieve_from_form( $form );       # needs pk data
+    my $obj = My::Class->find_or_create_from_form( $form ); # does not
+    
+pk hidden fields are always present in rendered forms, but may be empty (submits undef). undef does not 
+pass validation tests. The solution is to place pk fields in 'keepextras', not in 'fields'. That means they 
+are not validated at all. The only (I think) place pk data are used is in retrieve_from_form
+
+=cut
 
 sub _get_args
 {
@@ -171,8 +191,16 @@ sub _get_args
     # take a copy, and make sure not to transform undef into []
     my $original_fields = $args{fields} ? [ @{ $args{fields} } ] : undef;
     
-    $args{fields} ||= [ map {''.$_} $proto->columns( 'All' ) ];
+    my %pk = map { ''.$_ => 1 } $proto->primary_columns;
     
+    $args{fields} ||= [ map  {''.$_} 
+                        grep { ! $pk{ ''.$_ } }    
+                        $proto->columns( 'All' ) 
+                        ];
+                        
+    $args{keepextras} = [ keys %pk ];
+    
+    # for objects, populate with data
     my @values = map { '' . $proto->get( $_ ) } @{ $args{fields} } if ref $proto;
  
     $args{values} ||= \@values;
@@ -199,7 +227,7 @@ sub _make_form
     $form->{__cdbi_original_args__} = $orig;
     
     # this assumes meta_info only holds data on relationships
-    foreach my $modify ( 'hidden', 'options', keys %{ $them->meta_info } ) 
+    foreach my $modify ( 'hidden', 'options', 'file', keys %{ $them->meta_info } ) 
     {
         my $form_modify = "form_$modify";
         
@@ -211,8 +239,9 @@ sub _make_form
 
 =item search_form( %args )
 
-Build a form with inputs that can be fed to C<search_where_from_form>. For instance, 
-all selects are multiple. 
+Build a form with inputs that can be fed to search methods (e.g. C<search_where_from_form>). 
+For instance, all selects are multiple, and fields that normally would be required 
+are not. 
 
 In many cases, you will want to design your own search form, perhaps only searching 
 on a subset of the available columns. Note that you can acheive that by specifying 
@@ -221,7 +250,8 @@ on a subset of the available columns. Note that you can acheive that by specifyi
     
 in the args. 
 
-The following search options are available:
+The following search options are available. They are only relevant if processing 
+via C<search_where_from_form>.
 
 =over 4
 
@@ -342,6 +372,7 @@ C<fields> list), and hides them.
 
 =cut
 
+# these fields are not in the 'fields' list, but are in 'keepextras'
 sub form_hidden
 {
     my ( $me, $them, $form ) = @_;
@@ -381,29 +412,50 @@ sub form_options
     {
         next unless exists $form->field->{ $field }; # $form->field( name => $field );
         
-        my ( @series, $multiple );
-    
-        CASE: {
-            # MySQL enum
-            last CASE if @series = eval { $them->enum_vals( $field ) };  
-            # MySQL set
-            $multiple++, last CASE if @series = eval { $them->set_vals( $field ) };
-        }
+        my ( $series, $multiple ) = $me->_get_col_options_for_enumlike( $them, $field );
         
-        next unless @series;
+        next unless @$series;
         
         $form->field( name      => $field,
-                      options   => \@series,
+                      options   => $series,
                       multiple  => $multiple,
                       );
     }    
 }
 
-# meta_info is/includes:
-# e.g.  has_a    accessor    CDBI::Rel object
-# $hash{$type}->{$subtype} = $val;
+# also used in _auto_validate
+sub _get_col_options_for_enumlike
+{
+    my ( $me, $them, $col ) = @_;
+    
+    my ( @series, $multiple );
 
-# see example at end of file
+    CASE: {
+        # MySQL enum
+        last CASE if @series = eval { $them->enum_vals( $col ) };  
+        # MySQL set
+        $multiple++, last CASE if @series = eval { $them->set_vals( $col ) };
+        
+        # other dbs go here
+    }
+        
+    return \@series, $multiple;
+}
+
+=item form_file
+
+B<Unimplemented> - at the moment, you need to set the field type to C<file> manually. 
+
+Figures out if a column contains file data. 
+
+=cut
+
+sub form_file
+{
+    my ( $me, $them, $form ) = @_;
+
+    return;
+}
 
 =item form_has_a
 
@@ -619,11 +671,11 @@ Creates and returns a new object.
 
 sub create_from_form 
 {
-    my $class = shift;
+    my ( $class, $fb ) = @_;
     
     Carp::croak "create_from_form can only be called as a class method" if ref $class;
     
-    __PACKAGE__->_run_create( $class, @_ );
+    __PACKAGE__->_run_create( $class, $fb );
 }
 
 sub _run_create 
@@ -697,6 +749,7 @@ sub _run_update
     
     my $formdata = $fb->fields;
     
+    # I think this is now unnecessary (0.4), because pks are in keepextras
     delete $formdata->{ $_ } for map {''.$_} $them->primary_columns;
     
     # assumes no extra fields in the form
@@ -743,7 +796,7 @@ sub _run_update_or_create_from_form
 
     return unless $fb->submitted && $fb->validate;
 
-    my $formdata = $fb->fields;
+    #my $formdata = $fb->fields;
 
     my $object = $them->retrieve_from_form( $fb );
     
@@ -759,8 +812,9 @@ sub _run_update_or_create_from_form
 Note that search methods (except for C<retrieve_from_form>) will return a CDBI iterator 
 in scalar context, and a (possibly empty) list of objects in list context.
 
-All the search methods require that the submitted form should either be built using 
-C<search_form> (not C<as_form>), or should supply all C<required> (including C<has_a>) fields.
+All the search methods except C<retrieve_from_form> require that the submitted form should either be built using 
+C<search_form> (not C<as_form>), or should supply all C<required> (including C<has_a>) fields. 
+Otherwise they may fail validation checks for missing required fields. 
 
 =over 4
 
@@ -783,19 +837,11 @@ sub _run_retrieve_from_form
 {
     my ( $me, $them, $fb ) = @_;
     
-    return unless $fb->submitted && $fb->validate;
+    # we don't validate because pk data must side-step validation as it's 
+    # unknowable in advance whether they will even be present. 
+    #return unless $fb->submitted && $fb->validate;
     
-#    my @primary = $them->primary_columns;
-#    
-#    my %pkdata = $me->_get_search_spec( $them, $fb, \@primary );
-#    
-#    # CDBI croaks with missing pks
-#    return unless keys( %pkdata ) == @primary;
-
-    my $formdata = $fb->fields;
-    
-    # this can send undef's for pk values, which seems to be OK
-    my %pkdata = map { $_ => $formdata->{ $_ } } $them->primary_columns;
+    my %pkdata = map { $_ => $fb->cgi_param( ''.$_ ) || undef } $them->primary_columns;
     
     return $them->retrieve( %pkdata );
 }
@@ -998,17 +1044,314 @@ sub _run_retrieve_or_create_from_form
 
 =back
 
+=head1 Automatic validation setup
+
+If you place a normal L<CGI::FormBuilder|CGI::FormBuilder> validation spec in 
+C<< $class->form_builder_defaults->{validate} >>, that spec will be used to configure validation. 
+
+If there is no spec in C<< $class->form_builder_defaults->{validate} >>, then validation will 
+be configured automatically. The default configuration is pretty basic, but you can modify it 
+by placing settings in C<< $class->form_builder_defaults->{auto_validate} >>. 
+
+You must load L<Class::DBI::Plugin::Type|Class::DBI::Plugin::Type> in your class if using automatic 
+validation.
+
+=over 4
+
+=item Basic auto-validation
+
+Given no validation options for a column in the C<auto_validate> slot, the settings for most columns 
+will be taken from C<%Class::DBI::FormBuilder::ValidMap>. This maps SQL column types (as supplied by 
+L<Class::DBI::Plugin::Type|Class::DBI::Plugin::Type>) to the L<CGI::FormBuilder|CGI::FormBuilder> validation 
+settings C<VALUE>, C<INT>, or C<NUM>. 
+
+MySQL C<ENUM> or C<SET> columns will be set up to validate that the submitted value(s) match the allowed 
+values (although C<SET> column functionality requires the patch to CDBI::mysql mentioned above). 
+
+Any column listed in C<< $class->form_builder_defaults->{options} >> will be set to validate those values. 
+
+=item Advanced auto-validation
+
+The following settings can be placed in C<< $class->form_builder_defaults->{auto_validate} >>.
+
+=over 4
+
+=item validate
+
+Specify validate types for specific columns:
+
+    validate => { username   => [qw(nate jim bob)],
+                  first_name => '/^\w+$/',    # note the 
+                  last_name  => '/^\w+$/',    # single quotes!
+                  email      => 'EMAIL',
+                  password   => \&check_password,
+                  confirm_password => {
+                      javascript => '== form.password.value',
+                      perl       => 'eq $form->field("password")'
+                  }
+                          
+This option takes the same settings as the C<validate> option to C<CGI::FormBuilder::new()> 
+(i.e. the same as would otherwise go in C<< $class->form_builder_defaults->{validate} >>). 
+Settings here override any others. 
+
+=item skip_columns
+
+List of columns that will not be validated:
+
+    skip_columns => [ qw( secret_stuff internal_data ) ]
+
+=item match_columns
+
+Use regular expressions matching groups of columns to specify validation:
+
+    match_columns => { qr/(^(widget|burger)_size$/ => [ qw( small medium large ) ],
+                       qr/^count_.+$/             => 'INT',
+                       }
+                       
+=item validate_types
+
+Validate according to SQL data types:
+
+    validate_types => { date => \&my_date_checker,
+                       }
+                       
+Defaults are taken from the package global C<%TypesMap>. 
+                        
+=item match_types
+
+Use a regular expression to map SQL data types to validation types:
+
+    match_types => { qr(date) => \&my_date_checker,
+                     }
+                     
+=item debug
+    
+Control how much detail to report (via C<warn>) during setup. Set to 1 for brief 
+info, and 2 for a list of each column's validation setting.
+
+=item strict
+
+If set to 1, will die if a validation setting cannot be determined for any column. 
+Default is to issue warnings and not validate these column(s).
+    
+=back
+
+=item Validating relationships
+
+Although it would be possible to retrieve the IDs of all objects for a related column and use these to 
+set up validation, this would rapidly become unwieldy for larger tables. Default validation will probably be 
+acceptable in most cases, as the column type will usually be some kind of integer. 
+
+=item timestamp
+
+The default behaviour is to skip validating C<timestamp> columns. A warning will be issued
+if the C<debug> parameter is set to 2.
+
+=item Failures
+
+The default mapping of column types to validation types is set in C<%Class::DBI::FormBulder::ValidMap>, 
+and is probably incomplete. If you come across any failures, you can add suitable entries to the hash before calling C<as_form>. However, B<please> email me with any failures so the hash can be updated for everyone.
+
+=back
+
+=cut
+
+our %ValidMap = ( varchar   => 'VALUE',
+                  char      => 'VALUE', # includes MySQL enum and set
+                  blob      => 'VALUE', # includes MySQL text
+                  
+                  integer   => 'INT',
+                  bigint    => 'INT',
+                  smallint  => 'INT',
+                  tinyint   => 'INT',
+                  
+                  date      => 'VALUE',
+                  
+                  # normally you want to skip validating a timestamp column...
+                  #timestamp => 'VALUE',
+                  
+                  double    => 'NUM',
+                  float     => 'NUM',
+                  decimal   => 'NUM',
+                  );    
+                  
+sub _get_type
+{
+    my ( $me, $them, $col ) = @_;
+    
+    my $type = $them->column_type( $col );
+    
+    die "No type detected for column $col in $them" unless $type;
+        
+    # $type may be something like varchar(255)
+    
+    $type =~ s/[^a-z]*$//;
+
+    return $type;
+}
+                  
+sub _valid_map
+{
+    my ( $me, $type ) = @_;
+    
+    return $ValidMap{ $type };
+}
+
+sub _setup_auto_validation 
+{
+    my ( $me, $them, $fb_args ) = @_;
+    
+    # $fb_args is the args hash that will be sent to CGI::FB to construct the form. 
+    # Here we re-write $fb_args->{validate}
+    
+    my %args = $me->_get_auto_validate_args( $them );
+     
+    return unless %args;
+    
+    warn "auto-validating $them\n" if $args{debug};
+    
+    #warn "fb_args:" . Dumper( $fb_args );
+    
+    my $v_cols        = $args{validate}         || {}; 
+    my $skip_cols     = $args{skip_columns}     || [];
+    my $match_cols    = $args{match_columns}    || {}; 
+    my $v_types       = $args{validate_types}   || {}; 
+    my $match_types   = $args{match_types}      || {}; 
+    
+    my %skip = map { $_ => 1 } @$skip_cols;
+    
+    my %validate; 
+    
+    # $col->name preserves case - stringifying doesn't
+    foreach my $col ( @{ $fb_args->{fields} } ) 
+    {
+        next if $skip{ $col };    
+        
+        # this will get added at the end
+        next if $v_cols->{ $col }; 
+        
+        # look for columns with options
+        # TODO - what about related columns? - do not want to add 10^6 db rows to validation
+             
+        my $options = $them->form_builder_defaults->{options} || {};
+        
+        my $o = $options->{ $col };
+        
+        unless ( $o )
+        {
+            my ( $series, undef ) = $me->_get_col_options_for_enumlike( $them, $col );
+            $o = $series; 
+            warn "(Probably) setting validation to options (@$o) for $col in $them" if ( $args{debug} > 1 and @$o );
+            undef( $o ) unless @$o;            
+        }
+        
+        my $type = $me->_get_type( $them, $col );
+        
+        my $v = $o || $v_types->{ $type }; 
+                 
+        foreach my $regex ( keys %$match_types )
+        {
+            last if $v;
+            $v = $match_types->{ $regex } if $type =~ $regex;
+        }
+        
+        foreach my $regex ( keys %$match_cols )
+        {
+            last if $v;
+            $v = $match_cols->{ $regex } if $col =~ $regex;
+        }
+        
+        my $skip_ts = ( ( $type eq 'timestamp' ) && ! $v );
+        
+        warn "Skipping $them $col [timestamp]\n" if ( $skip_ts and $args{debug} > 1 );
+        
+        next if $skip_ts;
+        
+        $v ||= $me->_valid_map( $type ) || '';
+        
+        my $fail = "No validate type detected for column $col, type $type in $them"
+            unless $v;
+            
+        $fail and $args{strict} ? die $fail : warn $fail;
+    
+        my $type2 = substr( $type, 0, 25 );
+        $type2 .= '...' unless $type2 eq $type;
+        
+        warn sprintf "Untainting %s %s [%s] as %s\n", $them, $col, $type2, $v
+                if $args{debug} > 1;
+        
+        $validate{ $col } = $v if $v;
+    }
+    
+    my $validation = { %validate, %$v_cols };
+    
+    if ( $args{debug} > 1 )
+    {
+        Data::Dumper->require;
+        warn "Setting up validation: " . Data::Dumper::Dumper( $validation );
+    }
+    
+    $fb_args->{validate} = $validation;
+    
+    #use Data::Dumper;
+    #warn Dumper( $validation );
+    
+    return;
+}
+
+sub _get_auto_validate_args
+{
+    my ( $me, $them ) = @_;
+    
+    my $fb_defaults = $them->form_builder_defaults;
+    
+    if ( %{ $fb_defaults->{validate} || {} } && %{ $fb_defaults->{auto_validate} || {} } )
+    {
+        die "Got validation AND auto-validation settings in form_builder_defaults (should only have one or other)";
+    }
+    
+    return if %{ $fb_defaults->{validate} || {} };
+    
+    #use Data::Dumper;
+    #warn "automating with config " . Dumper( $fb_defaults->{auto_validate} );
+    
+    # stop lots of warnings, and ensure something is set so the cfg exists test passes
+    $fb_defaults->{auto_validate}->{debug} ||= 0;
+    
+    return %{ $fb_defaults->{auto_validate} };
+}
+
+
 =head1 TODO
 
-Use knowledge about select-like fields ( enum, set, has_a, has_many ) to generate 
-validation rules.
-
 Better merging of attributes. For instance, it'd be nice to set some field attributes 
-(e.g. size) in C<form_builder_defaults>, and not lose them when the fields list is 
+(e.g. size or type) in C<form_builder_defaults>, and not lose them when the fields list is 
 generated and added to C<%args>. 
 
 Store CDBI errors somewhere on the form. For instance, if C<update_from_form> fails because 
 no object could be retrieved using the form data. 
+
+Detect binary data and build a file upload widget. 
+
+C<is_a> relationships.
+
+C<enum> and C<set> equivalent column types in other dbs.
+
+Think about non-CDBI C<has_a> inflation/deflation. In particular, maybe there's a Better 
+Way than subclassing to add C<form_*> methods. For instance, adding a date-picker widget 
+to deal with DateTime objects. 
+
+Figure out how to build a form for a related column when starting from a class, not an object
+(pointed out by Peter Speltz). E.g. 
+
+   my $related = $object->some_col;
+
+   print $related->as_form->render;
+   
+will not work if $object is a class. Have a look at Maypole::Model::CDBI::related_class. 
+
+Integrate fields from a related class object into the same form (e.g. show address fields 
+in a person form, where person has_a address). 
 
 =head1 AUTHOR
 
