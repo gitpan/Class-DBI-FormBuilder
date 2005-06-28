@@ -1,5 +1,9 @@
 Revision history for Class-DBI-FormBuilder
 
+0.3_1  Tues 28 Jun, 2005 10:00
+        - first code for as_form_with_related     
+        - new dependency on List::Util
+
 0.3    Fri 24 Jun, 2005 14:20
         - added automatic configuration of validation settings
         - new dependency on Class::DBI::Plugin::Type

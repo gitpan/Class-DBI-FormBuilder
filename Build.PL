@@ -14,6 +14,7 @@ my $builder = Module::Build->new(
         'Class::Data::Inheritable' => 0,
         'Class::DBI' => 0,
         'Class::DBI::Plugin::Type' => 0,
+        'List::Util' => 0,
         
     },
     add_to_cleanup      => [ 'Class-DBI-FormBuilder-*' ],
