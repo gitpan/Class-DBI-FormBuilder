@@ -11,13 +11,14 @@ use CGI::FormBuilder 3;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.3_1';
+our $VERSION = '0.31';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 
 our %ValidMap = ( varchar   => 'VALUE',
                   char      => 'VALUE', # includes MySQL enum and set
                   blob      => 'VALUE', # includes MySQL text
+                  text      => 'VALUE',
                   
                   integer   => 'INT',
                   bigint    => 'INT',
@@ -32,6 +33,7 @@ our %ValidMap = ( varchar   => 'VALUE',
                   double    => 'NUM',
                   float     => 'NUM',
                   decimal   => 'NUM',
+                  numeric   => 'NUM',
                   );    
                   
 sub import
@@ -46,7 +48,6 @@ sub import
                      search_form
                      
                      as_form_with_related
-                     as_form_with_related2
                      
                      update_or_create_from_form
                      
@@ -182,9 +183,9 @@ itself).
 
 sub as_form
 {
-    my $proto = shift;
+    my ( $proto, %args_in ) = @_;
     
-    my ( $orig, %args ) = __PACKAGE__->_get_args( $proto, @_ );
+    my ( $orig, %args ) = __PACKAGE__->_get_args( $proto, %args_in );
     
     __PACKAGE__->_setup_auto_validation( $proto, \%args );
     
@@ -203,15 +204,15 @@ while processing a form submission:
     
 pk hidden fields are always present in rendered forms, but may be empty (submits undef). undef does not 
 pass validation tests. The solution is to place pk fields in 'keepextras', not in 'fields'. That means they 
-are not validated at all. The only (I think) place pk data are used is in retrieve_from_form
+are not validated at all. The only (I think) place submitted pk data are used is in retrieve_from_form
 
 =cut
 
 sub _get_args
 {
-    my ( $me, $proto ) = ( shift, shift );
+    my ( $me, $proto, %args_in ) = @_;
     
-    my %args = ( %{ $proto->form_builder_defaults }, @_ );
+    my %args = ( %{ $proto->form_builder_defaults }, %args_in );
     
     # take a copy, and make sure not to transform undef into []
     my $original_fields = $args{fields} ? [ @{ $args{fields} } ] : undef;
@@ -220,7 +221,8 @@ sub _get_args
     
     $args{fields} ||= [ map  {''.$_} 
                         grep { ! $pk{ ''.$_ } }    
-                        $proto->columns( 'All' ) 
+                        #$proto->columns( 'All' ) 
+                        $me->_db_order_columns( $proto, 'All' )
                         ];
                         
     $args{keepextras} = [ keys %pk ];
@@ -243,6 +245,20 @@ sub _get_args
     return $orig, %args;
 }
 
+# Get deep into CDBI to extract the columns in the same order as defined in the database.
+# In fact, this returns the columns in the order they were originally supplied to 
+# $proto->columns( All => [ col list ] ) Defaults 
+# to the order returned from the database query in CDBI::Loader, which for MySQL, 
+# is the same as the order in the database.
+sub _db_order_columns 
+{
+    my ( $me, $them, $group ) = @_;
+    
+    $group ||= 'All';
+    
+    return @{ $them->__grouper->{_groups}->{ $group } };
+} 
+
 sub _make_form
 {
     my ( $me, $them, $orig, %args ) = @_;
@@ -264,60 +280,78 @@ sub _make_form
 
 =item as_form_with_related
 
+Builds a form with fields from the target CDBI class/object, plus fields from the related objects. 
+
+Accepts the same arguments as C<as_form>, with these additions:
+
+=over 4
+
+=item related
+
+A hashref of C<< $field_name => $as_form_args_hashref >> settings. Each C<$as_form_args_hashref> 
+can take all the same settings as C<as_form>. These are used for generating the fields of the class or 
+object(s) referred to by that field. 
+
+=item show_related
+
+By default, all related fields are shown in the form. To only expand selected related fields, list 
+them in C<show_related>.
+
+=back
+
 =cut
 
 sub as_form_with_related
 {
     my ( $proto, %args ) = @_;
     
-    my $related_args = delete $args{related};
-    
-    my ( $main_orig, %main_form_args ) = __PACKAGE__->_get_args( $proto, %args );
-    
-    my ( $related_orig, %final_form_args ) = __PACKAGE__->_get_related_args( $proto, \%main_form_args, $related_args );
-    
-    warn "need to set up validation";
-    
-    my %orig = ( %$main_orig, %$related_orig );
-    
-    return __PACKAGE__->_make_related_form( $proto, \%orig, \%main_form_args, $related_args );
-}
-
-=item as_form_with_related2
-
-=cut
-
-sub as_form_with_related2
-{
-    my ( $proto, %args ) = @_;
-    
     my $related_args = delete( $args{related} );
+    my $show_related = delete( $args{show_related} ) || [];
     
     my $parent_form = $proto->as_form( %args );
     
-    foreach my $field ( $parent_form->field )
+    foreach my $field ( __PACKAGE__->_fields_and_has_many_accessors( $proto, $parent_form, $show_related ) )
     {
         # object or class
         my ( $related, $rel_type ) = __PACKAGE__->_related( $proto, $field );
         
         next unless $related;
         
-        __PACKAGE__->_splice_form( $related, $parent_form, $related_args->{ $field }, $field, $rel_type );
+        my @relateds = ref( $related ) eq 'ARRAY' ? @$related : ( $related );
+        
+        __PACKAGE__->_splice_form( $_, $parent_form, $field, $related_args->{ $field }, $rel_type ) for @relateds;
     }
     
     return $parent_form;
 }
+
+# deliberately ugly name to encourage something more generic in future
+sub _fields_and_has_many_accessors
+{
+    my ( $me, $them, $form, $show_related ) = @_;
+    
+    return @$show_related if @$show_related;
+    
+    my @fields = $form->field;
+    
+    my %seen = map { $_ => 1 } @fields;
+    
+    my @related = keys %{ $them->meta_info( 'has_many' ) || {} };
+    
+    push @fields, grep { ! $seen{ $_ } } @related;
+    
+    return @fields;
+}
         
 sub _splice_form
 {
-    my ( $me, $them, $parent_form, $args, $field_name, $rel_type ) = @_;
+    my ( $me, $them, $parent_form, $field_name, $args, $rel_type ) = @_;
     
     my $related_form = $them->as_form( %$args );
     
     my $moniker = $them->moniker;
     
-    # different rel_types get spliced differently e.g. is_a should probably not 
-    # allow editing
+    my @related_fields;
     
     foreach my $related_field_name ( map { ''.$_ } $related_form->field )
     {
@@ -327,22 +361,47 @@ sub _splice_form
         
         delete $related_field->{_form};
         
-        # this changes $related_field_name
         $related_field->{name} = $fake_name; 
-    
-        $related_field->{_form} = $parent_form;
         
-        # NOTE: this should figure out the correct offset to splice the new fields 
-        # into 
-        push @{ $parent_form->{fields} }, $related_field;
+        $related_field->{_form} = $parent_form;
         
         $parent_form->{fieldrefs}{ $fake_name } = $related_field;
     
         $parent_form->field( name  => $fake_name,
-                             label => $moniker . ' ' . $related_field_name,
+                             label => ucfirst( $moniker ) . ': ' . $related_field_name,
                              ) 
                                 unless $args->{labels}{ $related_field_name };
+                                
+        push @related_fields, $related_field;
     }
+
+    my $offset = 0;
+    
+    foreach my $parent_field ( @{ $parent_form->{fields} } )
+    {
+        $offset++;
+        last if $parent_field->name eq $field_name;        
+    }
+    
+    #push @{ $parent_form->{fields} }, $related_field;
+    splice @{ $parent_form->{fields} }, $offset, 0, @related_fields;
+
+    # different rel_types get treated differently e.g. is_a should probably not 
+    # allow editing
+    if ( $rel_type eq 'has_a' )
+    {
+        $parent_form->field( name => $field_name,
+                             type => 'hidden',
+                             );
+    }
+    elsif ( $rel_type eq 'is_a' )
+    {
+        $parent_form->field( name     => ''.$_,
+                             readonly => 1,
+                             )
+                                for @related_fields;
+    }
+    
 }
         
         
@@ -353,7 +412,7 @@ sub _splice_form
 
 
 
-
+=for retiring
 
 # fields keepextras values required
 sub _get_related_args
@@ -407,6 +466,8 @@ sub _get_related_args
     return ( $related_orig, %$main_form_args );
 }
 
+=cut
+
 sub _related
 {
     my ( $me, $them, $field ) = @_;
@@ -423,7 +484,8 @@ sub _related
     
     my $related_class;
  
-    warn "This stuff IS all necessary";   
+    # XXX
+    #warn "This stuff IS all necessary";   # though broken
 #    if ( @$mapping ) 
 #    {
 #        use Data::Dumper;
@@ -439,9 +501,12 @@ sub _related
     
     my $accessor = $related_meta->accessor;
     
-    my ( $related_object ) = $them->$accessor;
+    # multiple objects for has_many
+    my @related_objects = $them->$accessor;
     
-    return ( $related_object, $rel_type ) if $related_object;
+    return ( $related_objects[0], $rel_type ) if ( @related_objects == 1 and $related_objects[0] );
+    
+    return ( \@related_objects, $rel_type )   if @related_objects > 1;
     
     return ( $related_class, $rel_type );
 }
@@ -528,6 +593,8 @@ sub _encode_class
     return "CDBI_$token\_CDBI";   
 }
 
+=for retiring
+
 sub _make_related_form
 {
     my ( $me, $them, $orig, $main_args, $related_args ) = @_;
@@ -554,6 +621,8 @@ sub _make_related_form
     
     return $form;
 }
+
+=cut
 
 =item search_form( %args )
 
@@ -693,7 +762,7 @@ C<fields> list), and hides them.
 # these fields are not in the 'fields' list, but are in 'keepextras'
 sub form_hidden
 {
-    my ( $me, $them, $form, $relatives ) = @_;
+    my ( $me, $them, $form ) = @_;
     
     foreach my $field ( map {''.$_} $them->primary_columns )
     {
@@ -703,30 +772,6 @@ sub form_hidden
                       type => 'hidden',
                       value => $value,
                       );
-    }
-    
-    return unless $relatives;
-    
-    # add pk data for all related items (only for as_form_with_related)
-    foreach my $rel_type ( keys %$relatives )
-    {
-        foreach my $related_class ( keys %{ $relatives->{ $rel_type } } )
-        {
-            my @relateds = @{ $relatives->{ $rel_type }->{ $related_class } } || ( $related_class );
-                    
-            foreach my $field ( map {''.$_} $related_class->primary_columns )
-            {
-                foreach my $related ( @relateds )
-                {
-                    my $value = $related->get( $field ) if ref( $related );
-                    
-                    $form->field( name  => $me->_false_related_field_name( $related, $field ),
-                                  type  => 'hidden',
-                                  value => $value,
-                                  );
-                }
-            }
-        }
     }
 }
 
@@ -748,7 +793,7 @@ be emulated.
 
 sub form_options
 {
-    my ( $me, $them, $form, $relatives ) = @_;
+    my ( $me, $them, $form ) = @_;
     
     foreach my $field ( map {''.$_} $them->columns('All') )
     {
@@ -766,38 +811,6 @@ sub form_options
                       value     => $value,
                       );
     }    
-    
-    return unless $relatives;
-    
-    foreach my $rel_type ( keys %$relatives )
-    {
-        foreach my $related_class ( keys %{ $relatives->{ $rel_type } } )
-        {
-            my @relateds = @{ $relatives->{ $rel_type }->{ $related_class } } || ( $related_class );
-            
-            foreach my $field ( map {''.$_} $related_class->columns('All') )
-            {
-                foreach my $related ( @relateds )
-                {
-                    my $false_field_name = $me->_false_related_field_name( $related, $field );
-
-                    next unless exists $form->field->{ $false_field_name };
-                    
-                    my ( $series, $multiple ) = $me->_get_col_options_for_enumlike( $related, $field );
-                    
-                    next unless $series;
-                    
-                    my $value = $related->get( $field ) if ref( $related );
-                    
-                    $form->field( name      => $false_field_name,
-                                  options   => $series,
-                                  multiple  => $multiple,
-                                  value     => $value,
-                                  );
-                }
-            }
-        }
-    }
 }
 
 # also used in _auto_validate
@@ -851,11 +864,12 @@ Retrieves every row and creates an object for it - not good for large tables.
 
 sub form_has_a
 {
-    my ( $me, $them, $form, $relatives ) = @_;
+    my ( $me, $them, $form ) = @_;
     
     my $meta = $them->meta_info( 'has_a' ) || return;
     
-    warn "I think this is the wrong pk to use to populate the field value"; # see ???
+    # XXX
+    #warn "I think this is the wrong pk to use to populate the field value"; # see ???
     my $pk = $them->primary_column;
     
     my @haves = keys %$meta;
@@ -874,47 +888,6 @@ sub form_has_a
                       value => $related_object->$pk, # ???
                       );
     }
-
-    return unless $relatives;
-    
-    foreach my $rel_type ( keys %$relatives )
-    {
-        foreach my $related_class ( keys %{ $relatives->{ $rel_type } } )
-        {
-            my @relateds = @{ $relatives->{ $rel_type }->{ $related_class } } || ( $related_class );
-            
-            foreach my $related ( @relateds )
-            {
-                my $meta = $related->meta_info( 'has_a' ) || next;
-                
-                my $pk = $related->primary_column;
-                
-                my @haves = keys %$meta;            
-            
-                foreach my $field ( @haves )
-                {
-                    my $false_field_name = $me->_false_related_field_name( $related, $field );
-                    
-                    next unless exists $form->field->{ $false_field_name };
-                    
-                    my $options = $me->_get_field_options( $related, $field, 'has_a' ) || next;
-                    
-                    my $related_has_a = $related->get( $field ) if ref( $related );
-                    
-                    ref( $related ) && $related_has_a or die sprintf
-                        'Failed to retrieve a related object from %s has_a field %s - inconsistent db?',
-                            ref( $related ), $field;
-                    
-                    $form->field( name      => $false_field_name,
-                                  options   => $options,
-                                  value     => $related_has_a->$pk, # ???
-                                  required  => 1, 
-                                  );
-                }
-            }
-        }
-    }
-    
 }
 
 =item form_has_many 
@@ -925,7 +898,7 @@ Also assumes a single primary column.
 
 sub form_has_many
 {
-    my ( $me, $them, $form, $relatives ) = @_;
+    my ( $me, $them, $form ) = @_;
     
     my $meta = $them->meta_info( 'has_many' ) || return;
     
@@ -963,64 +936,6 @@ sub form_has_many
                       value => \@many_pks,
                       );
     }
-    
-    return unless $relatives;
-    
-    foreach my $rel_type ( keys %$relatives )
-    {
-        foreach my $related_class ( keys %{ $relatives->{ $rel_type } } )
-        {
-            my @relateds = @{ $relatives->{ $rel_type }->{ $related_class } } || ( $related_class );
-            
-            foreach my $related ( @relateds )
-            {
-
-                my $meta = $related->meta_info( 'has_many' ) || next;
-                
-                my @extras = keys %$meta;
-                
-                # -----
-                warn "add configuration option here";
-                #my %allowed = map { $_ => 1 } @{ $form->{__cdbi_original_args__}->{fields} || [ @extras ] };
-                
-                #my @wanted = grep { $allowed{ $_ } } @extras;
-                my @wanted = @extras;
-                # -----
-                
-                foreach my $field ( @wanted )
-                {
-                    my $false_field_name = $me->_false_related_field_name( $related, $field );
-                    
-                    next unless exists $form->field->{ $false_field_name };
-                    
-                    # the 'next' is probably superfluous because @wanted is carefully filtered now
-                    # - ok, replaced with die
-                    my $options = $me->_get_field_options( $related, $field, 'has_many' ) || 
-                        die "no options for $field in $related";
-                
-                    my $rel = $meta->{ $field };
-                    
-                    my $many_pks;
-                    
-                    if ( ref $related )
-                    {
-                        my $accessor              = $rel->accessor      || die "no accessor for $field";
-                        my $related_related_class = $rel->foreign_class || die "no foreign_class for $field";
-                        
-                        my $foreign_pk = $related_related_class->primary_column;
-                        
-                        $many_pks = [ map { $_->{ $foreign_pk } } $related->$accessor->data ];
-                    }
-                    
-                    $form->field( name     => $false_field_name,
-                                  options  => $options,
-                                  value    => $many_pks,
-                                  multiple => 1,
-                                );
-                }
-            }
-        }
-    }
 }
 
 =item form_might_have
@@ -1032,7 +947,7 @@ Also assumes a single primary column.
 # this code is almost identical to form_has_many
 sub form_might_have
 {
-    my ( $me, $them, $form, $relatives ) = @_;
+    my ( $me, $them, $form ) = @_;
     
     my $meta = $them->meta_info( 'might_have' ) || return;
     
@@ -1064,64 +979,6 @@ sub form_might_have
         $form->field( name  => $field,
                       value => $might_have_object_id,
                       );
-    }
-    
-    return unless $relatives;
-    
-    foreach my $rel_type ( keys %$relatives )
-    {
-        foreach my $related_class ( keys %{ $relatives->{ $rel_type } } )
-        {
-            my @relateds = @{ $relatives->{ $rel_type }->{ $related_class } } || ( $related_class );
-            
-            foreach my $related ( @relateds )
-            {
-
-                my $meta = $related->meta_info( 'might_have' ) || next;
-                
-                my @extras = keys %$meta;
-                
-                # -----
-                warn "add configuration option here";
-                #my %allowed = map { $_ => 1 } @{ $form->{__cdbi_original_args__}->{fields} || [ @extras ] };
-                
-                #my @wanted = grep { $allowed{ $_ } } @extras;
-                my @wanted = @extras;
-                # -----
-                
-                foreach my $field ( @wanted )
-                {
-                    my $false_field_name = $me->_false_related_field_name( $related, $field );
-                    
-                    next unless exists $form->field->{ $false_field_name };
-                    
-                    # the 'next' is probably superfluous because @wanted is carefully filtered now
-                    # - ok, replaced with die
-                    my $options = $me->_get_field_options( $related, $field, 'might_have' ) || 
-                        die "no options for $field in $related";
-                
-                    my $rel = $meta->{ $field };
-                    
-                    my $might_have_object_id;
-                    
-                    if ( ref $related )
-                    {
-                        my $accessor              = $rel->accessor      || die "no accessor for $field";
-                        my $related_related_class = $rel->foreign_class || die "no foreign_class for $field";
-                        
-                        my $foreign_pk = $related_related_class->primary_column;
-                        
-                        my $might_have_object = $related->$accessor;
-                        $might_have_object_id = $might_have_object ? $might_have_object->$foreign_pk : undef; # was ''
-                    }
-                    
-                    $form->field( name     => $false_field_name,
-                                  options  => $options,
-                                  value    => $might_have_object_id,
-                                );
-                }
-            }
-        }
     }
 }
 
