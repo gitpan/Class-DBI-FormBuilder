@@ -26,13 +26,21 @@ $ENV{QUERY_STRING}   = 'id=1&_submitted=1';
     
     my $form = $dbaird->as_form_with_related;
     
+    #use Data::Dumper;
+    
+    my $meta = $dbaird->meta_info;
+    
+    
     my $html = $form->render;
     
     TODO: {
-        local $TODO = 'as_form_with_related not ready';
-    
+        local $TODO = 'bug - extra pk';
+        
         # an extra pk field is getting added
+        # ref: the test in 05.update_or_create.t confirms only 1 field is expected
         my @matches = $html =~ /(name="id")/g;
         is( scalar( @matches ), 1 );
     }
+
+    #warn Dumper( $meta );
 }

@@ -7,11 +7,13 @@ use Carp();
 use List::Util();
 use CGI::FormBuilder 3;
 
+use UNIVERSAL::require;
+
 # C::FB sometimes gets confused when passed CDBI::Column objects as field names, 
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.31';
+our $VERSION = '0.32';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 
@@ -26,6 +28,7 @@ our %ValidMap = ( varchar   => 'VALUE',
                   tinyint   => 'INT',
                   
                   date      => 'VALUE',
+                  time      => 'VALUE',
                   
                   # normally you want to skip validating a timestamp column...
                   #timestamp => 'VALUE',
@@ -228,7 +231,10 @@ sub _get_args
     $args{keepextras} = [ keys %pk ];
     
     # for objects, populate with data
-    my @values = map { '' . $proto->get( $_ ) } @{ $args{fields} } if ref $proto;
+    # nb. don't say $proto->get( $_ ) because $_ may be an accessor installed by a relationship 
+    # (e.g. has_many) - get() only works with real columns.
+    my @values = eval { map { '' . $proto->$_ } @{ $args{fields} } } if ref $proto;
+    die "Error populating values for $proto from '@{ $args{fields} }': $@" if $@;
  
     $args{values} ||= \@values;
     
@@ -247,7 +253,7 @@ sub _get_args
 
 # Get deep into CDBI to extract the columns in the same order as defined in the database.
 # In fact, this returns the columns in the order they were originally supplied to 
-# $proto->columns( All => [ col list ] ) Defaults 
+# $proto->columns( All => [ col list ] ). Defaults 
 # to the order returned from the database query in CDBI::Loader, which for MySQL, 
 # is the same as the order in the database.
 sub _db_order_columns 
@@ -290,7 +296,8 @@ Accepts the same arguments as C<as_form>, with these additions:
 
 A hashref of C<< $field_name => $as_form_args_hashref >> settings. Each C<$as_form_args_hashref> 
 can take all the same settings as C<as_form>. These are used for generating the fields of the class or 
-object(s) referred to by that field. 
+object(s) referred to by that field. For instance, you could use this to only display a subset of the 
+fields of the related class. 
 
 =item show_related
 
@@ -310,6 +317,8 @@ sub as_form_with_related
     
     my $parent_form = $proto->as_form( %args );
     
+    my @_rels;
+    
     foreach my $field ( __PACKAGE__->_fields_and_has_many_accessors( $proto, $parent_form, $show_related ) )
     {
         # object or class
@@ -319,8 +328,12 @@ sub as_form_with_related
         
         my @relateds = ref( $related ) eq 'ARRAY' ? @$related : ( $related );
         
+        push @_rels, @relateds;
+        
         __PACKAGE__->_splice_form( $_, $parent_form, $field, $related_args->{ $field }, $rel_type ) for @relateds;
     }
+    
+    #die "Got rels: @_rels";
     
     return $parent_form;
 }
@@ -332,7 +345,11 @@ sub _fields_and_has_many_accessors
     
     return @$show_related if @$show_related;
     
-    my @fields = $form->field;
+    # Cleaning these out appears not to fix multiple pc fields, but also seems like the 
+    # right thing to do. 
+    my %pc = map { $_ => 1 } $them->primary_columns;
+    
+    my @fields = grep { ! $pc{ $_ } } $form->field;
     
     my %seen = map { $_ => 1 } @fields;
     
@@ -343,6 +360,9 @@ sub _fields_and_has_many_accessors
     return @fields;
 }
         
+# Add fields representing related class/object $them, to $parent_form, which represents 
+# the class/object as_form_with_related was called on. E.g. add brewry, style, and many pubs 
+# to a beer form. 
 sub _splice_form
 {
     my ( $me, $them, $parent_form, $field_name, $args, $rel_type ) = @_;
@@ -383,7 +403,6 @@ sub _splice_form
         last if $parent_field->name eq $field_name;        
     }
     
-    #push @{ $parent_form->{fields} }, $related_field;
     splice @{ $parent_form->{fields} }, $offset, 0, @related_fields;
 
     # different rel_types get treated differently e.g. is_a should probably not 
@@ -404,71 +423,32 @@ sub _splice_form
     
 }
         
-        
-        
-        
-        
-
-
-
-
-=for retiring
-
-# fields keepextras values required
-sub _get_related_args
+# Return the class or object(s) associated with a field, if anything is associated. 
+sub _related
 {
-    my ( $me, $them, $main_form_args, $related_args_in ) = @_;
-
-    my @main_form_fields = @{ $main_form_args->{fields} };
+    my ( $me, $them, $field ) = @_;
     
-    my $offset = 0;
+    my ( $related_class, $rel_type ) = $me->_related_class_and_rel_type( $them, $field );
     
-    my $related_orig = {};
+    return unless $related_class;
     
-    foreach my $field ( @main_form_fields )
-    {
-        # object or class
-        my ( $related, $rel_type ) = __PACKAGE__->_related( $them, $field );
-        
-        next unless $related;
-        
-        my $related_class = ref( $related ) || $related;
-        
-        $main_form_args->{_relatives_}->{ $rel_type }->{ $related_class } = [];
-        
-        push( @{ $main_form_args->{_related_}->{ $rel_type }->{ $related_class } }, $related )
-            if ref( $related );
-        
-        my ( $orig, %related_args ) = __PACKAGE__->_get_args( $related, %$related_args_in ); 
-        
-        $related_orig->{ $related_class } = $orig;
-        
-        my @false_fnames = map { __PACKAGE__->_false_related_field_name( $related, $_ ) } 
-                               @{ $related_args{fields} };
-        
-        splice @{ $main_form_args->{fields} }, ++$offset, 0, @false_fnames;
+    return ( $related_class, $rel_type ) unless ref( $them );
     
-        if ( ref $related )
-        {
-            my @values = map { '' . $related->get( $_ ) } @{ $related_args{fields} };
-            
-            splice @{ $main_form_args->{values} }, $offset, 0, @{ $related_args{values} };
-        }
-        
-        $main_form_args->{required} ||= [];
-        $related_args{required}     ||= [];
+    my $related_meta = $them->meta_info( $rel_type => $field ) ||
+            die "No '$rel_type' meta for '$them', field '$field'";
     
-        push @{ $main_form_args->{required} }, @{ $related_args{required} };
-        
-        $offset += @{ $related_args{fields} };
-    }
+    my $accessor = eval { $related_meta->accessor };    
+    die "Can't find accessor in meta '$related_meta' for '$rel_type' field '$field' in '$them': $@" if $@;
     
-    return ( $related_orig, %$main_form_args );
+    # multiple objects for has_many
+    my @related_objects = $them->$accessor;
+    
+    return ( $related_class,      $rel_type ) unless @related_objects;
+    return ( $related_objects[0], $rel_type ) if @related_objects == 1; 
+    return ( \@related_objects,   $rel_type );
 }
 
-=cut
-
-sub _related
+sub _related_class_and_rel_type
 {
     my ( $me, $them, $field ) = @_;
     
@@ -484,33 +464,28 @@ sub _related
     
     my $related_class;
  
-    # XXX
-    #warn "This stuff IS all necessary";   # though broken
-#    if ( @$mapping ) 
-#    {
-#        use Data::Dumper;
-#        die Dumper( [ $mapping, $related_meta->{foreign_class}->meta_info( $rel_type ) ] );
-#        $related_class = $related_meta->{foreign_class}->meta_info( $rel_type )->{ $$mapping[0] }->{foreign_class};
-#    }
-#    else 
-#    {
-        $related_class = $related_meta->{foreign_class};
-#    }
+    if ( @$mapping ) 
+    {
+        #use Data::Dumper;
+        #my $foreign_meta = $related_meta->foreign_class->meta_info( 'has_a' );
+        #die Dumper( [ $mapping, $rel_type, $related_meta, $foreign_meta ] );
+        $related_class = $related_meta->foreign_class
+                                      ->meta_info( 'has_a' )
+                                      ->{ $$mapping[0] }
+                                      ->foreign_class;
     
-    return ( $related_class, $rel_type ) unless ref( $them );
+        my $accessor = $related_meta->accessor;   
+        my $map = $$mapping[0];                        
+    }
+    else 
+    {
+        $related_class = $related_meta->foreign_class;
+    }
     
-    my $accessor = $related_meta->accessor;
-    
-    # multiple objects for has_many
-    my @related_objects = $them->$accessor;
-    
-    return ( $related_objects[0], $rel_type ) if ( @related_objects == 1 and $related_objects[0] );
-    
-    return ( \@related_objects, $rel_type )   if @related_objects > 1;
-    
-    return ( $related_class, $rel_type );
+    return ( $related_class, $rel_type );    
 }
 
+# ------------------------------------------------------- encode / decode field names -----
 sub _false_related_field_name
 {
     my ( $me, $them, $real_field_name ) = @_;
@@ -592,37 +567,7 @@ sub _encode_class
     
     return "CDBI_$token\_CDBI";   
 }
-
-=for retiring
-
-sub _make_related_form
-{
-    my ( $me, $them, $orig, $main_args, $related_args ) = @_;
-    
-    # related_class => rel_type
-    my $relatives = delete $main_args->{_relatives_};
-    
-    my %all_rel_types = map { $_ => 1 } keys %$relatives, keys %{ $them->meta_info };
-    
-    my $form = CGI::FormBuilder->new( %$main_args );
-    
-    # { fields  => [ qw( a b c ) ],
-    #   $class  => { fields => [ qw( x y z ) ] },
-    #   $class2 => ...
-    $form->{__cdbi_original_args__} = $orig;
-    
-    # this assumes meta_info only holds data on relationships
-    foreach my $modify ( @BASIC_FORM_MODIFIERS, keys %all_rel_types )
-    {
-        my $form_modify = "form_$modify";
-        
-        $me->$form_modify( $them, $form, $relatives );
-    }
-    
-    return $form;
-}
-
-=cut
+# ------------------------------------------------------- end encode / decode field names -----
 
 =item search_form( %args )
 
@@ -860,6 +805,8 @@ This method assumes the primary key is a single column - patches welcome.
 
 Retrieves every row and creates an object for it - not good for large tables.
 
+If the relationship is to a non-CDBI class, loads a plugin to handle the field (see below - Plugins).
+
 =cut
 
 sub form_has_a
@@ -868,27 +815,107 @@ sub form_has_a
     
     my $meta = $them->meta_info( 'has_a' ) || return;
     
-    # XXX
-    #warn "I think this is the wrong pk to use to populate the field value"; # see ???
-    my $pk = $them->primary_column;
-    
     my @haves = keys %$meta;
     
     foreach my $field ( @haves ) 
     {
-        $me->_set_field_options( $them, $form, $field, 'has_a', { required => 1 } ) || next;
-                      
-        next unless ref( $them );
+        #$me->_set_field_options( $them, $form, $field, { required => 1 } ) || next;
+        next unless exists $form->field->{ $field };
         
-        my $related_object = $them->get( $field ) || die sprintf
-            'Failed to retrieve a related object from %s has_a field %s - inconsistent db?',
-                ref( $them ), $field;
+        my ( $related_class, undef ) = $me->_related_class_and_rel_type( $them, $field );
         
-        $form->field( name  => $field,
-                      value => $related_object->$pk, # ???
-                      );
+        if ( $related_class->isa( 'Class::DBI' ) ) 
+        {
+            my $options = $me->_field_options( $them, $form, $field ) || 
+                die "No options detected for field '$field'";
+                
+            my ( $related_object, $value );
+            
+            if ( ref $them )
+            {
+                $related_object = $them->get( $field ) || die sprintf
+                'Failed to retrieve a related object from %s has_a field %s - inconsistent db?',
+                    ref( $them ), $field;
+                    
+                my $pk = $related_object->primary_column;
+                    
+                $value = $related_object->$pk; 
+            }
+                
+            $form->field( name     => $field,
+                          options  => $options,
+                          required => 1,
+                          value    => $value,
+                          );        
+        } 
+        else 
+        {
+            my $class = "Class::DBI::FormBuilder::Plugin::$related_class";
+                        
+            if ( $class->require )
+            {
+                $class->field( $them, $form, $field );
+            }
+#            elsif ( $@ =~ // ) XXX
+#            {
+#                # or simply stringify
+#                $form->field( name     => $field,
+#                              required => 1,
+#                              value    => $them->$field.'',
+#                              );        
+#            }
+            else
+            {
+                die "Failed to load $class: $@";
+            }
+        }        
+        
     }
 }
+
+=for ref
+
+package Class::DBI::FormBuilder::Plugin::Time::Piece;
+use strict;
+use warnings FATAL => 'all';
+
+#use Class::DBI::Plugin::Type; # not needed for mysql
+
+# takes a list of stuff, calls/returns $form->field(%args)
+#
+sub field 
+{
+    my ( $class, $them, $form, $field ) = @_;
+
+    my $type = $them->column_type( $field );
+
+    my $value = $them->$field.''; # lousy default
+    
+    my $validate = undef;
+    
+    if ( $type eq 'time' ) 
+    {
+        $value = $them->$field->hms;
+        
+        $validate = '/\d\d:\d\d:\d\d/';
+    } elsif ( $type eq 'date' ) 
+    {
+        $value = $them->$field->ymd;
+        
+        $validate = '/\d{4}-\d\d-\d\d/';
+    } else 
+    {
+        die "don't understand column type '$type'";
+    }
+    
+    $form->field( name      => $field,
+                  value     => $value,
+                  required  => 1,
+                  validate  => $validate,
+                  );
+}
+
+=cut
 
 =item form_has_many 
 
@@ -908,7 +935,7 @@ sub form_has_many
     
     my @wanted = grep { $allowed{ $_ } } @extras;
     
-    $form->field( name => $_, multiple => 1 ) for @wanted;    
+    #$form->field( name => $_, multiple => 1 ) for @wanted;    
     
     # The target class/object ($them) does not have a column for the related class, 
     # so we need to add these to the form, then figure out their options.
@@ -918,22 +945,43 @@ sub form_has_many
     
     foreach my $field ( @wanted )
     {
-        # the 'next' is probably superfluous because @wanted is carefully filtered now
-        $me->_set_field_options( $them, $form, $field, 'has_many' ) || next;
+        # the 'next' condition is not tested because @wanted lists fields that probably 
+        # don't exist yet, but should
+        #next unless exists $form->field->{ $field };
+        
+        my $options = $me->_field_options( $them, $form, $field ) || 
+            die "No options detected for '$them' field '$field'";
+            
+        my @many_pks;
+        
+        if ( ref $them )
+        {
+            my $rel = $meta->{ $field };
+            
+            my $accessor = $rel->accessor || die "no accessor for $field";
+            
+            my ( $related_class, undef ) = $me->_related_class_and_rel_type( $them, $field );
+            die "no foreign_class for $field" unless $related_class;
+            
+            my $foreign_pk = $related_class->primary_column;
+            
+            # don't be tempted to access pks directly in $iter->data - they may refer to an 
+            # intermediate table via a mapping method
+            my $iter = $them->$accessor;
+            
+            while ( my $obj = $iter->next )
+            {
+                die "retrieved " . ref( $obj ) . " '$obj' is not a $related_class" 
+                    unless ref( $obj ) eq $related_class;
+                    
+                push @many_pks, $obj->$foreign_pk;
+            }
+        }    
                       
-        next unless ref( $them );
-        
-        my $rel = $meta->{ $field };
-        
-        my $accessor      = $rel->accessor      || die "no accessor for $field";
-        my $related_class = $rel->foreign_class || die "no foreign_class for $field";
-        
-        my $foreign_pk = $related_class->primary_column;
-        
-        my @many_pks = map { $_->{ $foreign_pk } } $them->$accessor->data;
-        
-        $form->field( name  => $field,
-                      value => \@many_pks,
+        $form->field( name     => $field,
+                      value    => \@many_pks,
+                      options  => $options,
+                      multiple => 1,
                       );
     }
 }
@@ -957,97 +1005,64 @@ sub form_might_have
     
     my @wanted = grep { $allowed{ $_ } } @extras;
     
-    $form->field( name => $_, multiple => undef ) for @wanted;    
-    
     foreach my $field ( @wanted ) 
     {
-        # the 'next' is probably superfluous because @wanted is carefully filtered now
-        $me->_set_field_options( $them, $form, $field, 'might_have' ) || next;
-                      
-        next unless ref( $them );
+        # the 'next' condition is not tested because @wanted lists fields that probably 
+        # don't exist yet, but should
         
-        my $rel = $meta->{ $field };
+        my $options = $me->_field_options( $them, $form, $field ) || 
+            die "No options detected for '$them' field '$field'";
+
+        my $might_have_object_id;
         
-        my $accessor      = $rel->accessor      || die "no accessor for $field";
-        my $related_class = $rel->foreign_class || die "no foreign_class for $field";
+        if ( ref $them )
+        {        
+            my $rel = $meta->{ $field };
+            
+            my $accessor = $rel->accessor || die "no accessor for $field";
+
+            my ( $related_class, undef ) = $me->_related_class_and_rel_type( $them, $field );
+            die "no foreign_class for $field" unless $related_class;
+            
+            my $foreign_pk = $related_class->primary_column;
+                        
+            my $might_have_object = $them->$accessor;
+            
+            if ( $might_have_object )
+            {
+                die "retrieved " . ref( $might_have_object ) . " '$might_have_object' is not a $related_class" 
+                    unless ref( $might_have_object ) eq $related_class;
+            }
+            
+            $might_have_object_id = $might_have_object ? $might_have_object->$foreign_pk : undef; # was ''
+        }
         
-        my $foreign_pk = $related_class->primary_column;
-        
-        my $might_have_object = $them->$accessor;
-        my $might_have_object_id = $might_have_object ? $might_have_object->$foreign_pk : undef; # was ''
-        
-        $form->field( name  => $field,
-                      value => $might_have_object_id,
+        $form->field( name     => $field,
+                      value    => $might_have_object_id,
+                      options  => $options,
                       );
     }
 }
 
-# note - we assume this method is only called on fields that require extra options
-#      - the field might not exist (if building a form with only some of the available
-#        fields)
-sub _set_field_options
-{
-    my ( $me, $them, $form, $field, $rel_type, $field_args ) = @_;
-    
-    $field_args ||= {};
-
-    return unless exists $form->field->{ $field };
-    
-    my $options = $me->_field_options( $them, $form, $field, $rel_type ) || 
-            die "No options detected for $rel_type field '$field'";
-            
-    $form->field( name    => $field,
-                  options => $options,
-                  %$field_args,
-                  );
-    
-    return 1;
-}
-
 sub _field_options
 {
-    my ( $me, $them, $form, $field, $rel_type ) = @_;
+    my ( $me, $them, $form, $field ) = @_;
     
-    return unless exists $form->field->{ $field };
+    my ( $related_class, undef ) = $me->_related_class_and_rel_type( $them, $field );
+     
+    return unless $related_class;
     
-    my $rel = $them->meta_info( $rel_type, $field ) || return;
+    return unless $related_class->isa( 'Class::DBI' );
     
-    return unless $rel->foreign_class->isa( 'Class::DBI' );
-
-    my $related_class = $rel->foreign_class;
-        
     my $iter = $related_class->retrieve_all;
+    
+    my $pk = $related_class->primary_column;
     
     my @options;
     
     while ( my $object = $iter->next )
     {
-        push @options, [ $object->id, "$object" ];
-    }
-    
-    return \@options;
-}
-
-# this is a better way of working, currently just used in the as_form_with_related parts 
-# of form_* methods, but eventually the other bits will work the same way, rather than 
-# using _set_field_options
-sub _get_field_options
-{
-    my ( $me, $them, $field, $rel_type ) = @_;
-    
-    my $rel = $them->meta_info( $rel_type, $field ) || return;
-    
-    return unless $rel->foreign_class->isa( 'Class::DBI' );
-
-    my $related_class = $rel->foreign_class;
-        
-    my $iter = $related_class->retrieve_all;
-    
-    my @options;
-    
-    while ( my $object = $iter->next )
-    {
-        push @options, [ $object->id, "$object" ];
+        push @options, [ $object->$pk, ''.$object ];
     }
     
     return \@options;
@@ -1717,6 +1732,16 @@ sub _get_auto_validate_args
     return %{ $fb_defaults->{auto_validate} };
 }
 
+=head1 Plugins
+
+C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
+load (via C<require>) an appropriate plugin. For instance, for a C<Time::Piece> column, it will attempt 
+to load C<Class::DBI::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, passing 
+the CDBI class for whom the form has been constructed, the form, and the name of the field being processed. 
+The plugin can use this information to modify the form, perhaps adding extra fields, or controlling 
+stringification, or setting up custom validation. 
+
+If no plugin is found, a fatal exception is raised. 
 
 =head1 TODO
 
@@ -1735,7 +1760,8 @@ C<enum> and C<set> equivalent column types in other dbs.
 
 Think about non-CDBI C<has_a> inflation/deflation. In particular, maybe there's a Better 
 Way than subclassing to add C<form_*> methods. For instance, adding a date-picker widget 
-to deal with DateTime objects. 
+to deal with DateTime objects. B<UPDATE>: the new plugin architecture added in 0.32 should 
+handle this.
 
 Figure out how to build a form for a related column when starting from a class, not an object
 (pointed out by Peter Speltz). E.g. 
@@ -1747,7 +1773,9 @@ Figure out how to build a form for a related column when starting from a class, 
 will not work if $object is a class. Have a look at Maypole::Model::CDBI::related_class. 
 
 Integrate fields from a related class object into the same form (e.g. show address fields 
-in a person form, where person has_a address). 
+in a person form, where person has_a address). B<UPDATE>: fairly well along in 0.32 (C<as_form_with_related>).
+
+C<_splice_form> needs to handle custom setup for more relationship types. 
 
 =head1 AUTHOR
 
@@ -1760,6 +1788,10 @@ C<bug-class-dbi-plugin-formbuilder@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Class-DBI-Plugin-FormBuilder>.
 I will be notified, and then you'll automatically be notified of progress on
 your bug as I make changes.
+
+=head1 ACKNOWLEDGEMENTS
+
+James Tolley for providing the plugin code.
 
 =head1 COPYRIGHT & LICENSE
 
@@ -1825,5 +1857,64 @@ $VAR1 = {
                                            }, 'Class::DBI::Relationship::HasMany' )
                         }
         };
+
+
+And for BeerFB::Pub:
+
+$VAR1 = {
+          'has_many' => {
+                          'beers' => bless( {
+                                              'foreign_class' => 'BeerFB::Handpump',
+                                              'name' => 'has_many',
+                                              'args' => {
+                                                          'mapping' => [
+                                                                         'beer'
+                                                                       ],
+                                                          'foreign_key' => 'pub',
+                                                          'order_by' => undef
+                                                        },
+                                              'class' => 'BeerFB::Pub',
+                                              'accessor' => 'beers'
+                                            }, 'Class::DBI::Relationship::HasMany' )
+                        }
+        };
+
+And for BeerFB::Handpump:
+
+$VAR1 = {
+          'has_a' => {
+                       'pub' => bless( {
+                                         'foreign_class' => 'BeerFB::Pub',
+                                         'name' => 'has_a',
+                                         'args' => {},
+                                         'class' => 'BeerFB::Handpump',
+                                         'accessor' => bless( {
+                                                                'name' => 'pub',
+                                                                '_groups' => {
+                                                                               'All' => 1
+                                                                             },
+                                                                'mutator' => 'pub',
+                                                                'placeholder' => '?',
+                                                                'accessor' => 'pub'
+                                                              }, 'Class::DBI::Column' )
+                                       }, 'Class::DBI::Relationship::HasA' ),
+                       'beer' => bless( {
+                                          'foreign_class' => 'BeerFB::Beer',
+                                          'name' => 'has_a',
+                                          'args' => {},
+                                          'class' => 'BeerFB::Handpump',
+                                          'accessor' => bless( {
+                                                                 'name' => 'beer',
+                                                                 '_groups' => {
+                                                                                'All' => 1
+                                                                              },
+                                                                 'mutator' => 'beer',
+                                                                 'placeholder' => '?',
+                                                                 'accessor' => 'beer'
+                                                               }, 'Class::DBI::Column' )
+                                        }, 'Class::DBI::Relationship::HasA' )
+                     }
+        };
+
 
 

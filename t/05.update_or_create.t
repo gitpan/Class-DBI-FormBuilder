@@ -30,6 +30,12 @@ my $data = { street => 'NastyStreet',
 
 my $form = Person->as_form;
 
+# this is here just as a proof that there should only be 1 - in 51.related.t I was getting 
+# 2 id widgets
+my $html = $form->render;
+my @matches = $html =~ /(name="id")/g;
+is( scalar( @matches ), 1 );
+
 is_deeply( scalar $form->field, $data );
 
 my $obj;

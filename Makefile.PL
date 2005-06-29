@@ -11,7 +11,8 @@ WriteMakefile
                            'Class::Data::Inheritable' => '0',
                            'List::Util' => '0',
                            'Test::Exception' => '0',
-                           'Test::More' => '0'
+                           'Test::More' => '0',
+                           'UNIVERSAL::require' => '0'
                          },
           'INSTALLDIRS' => 'site',
           'PL_FILES' => {}

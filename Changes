@@ -1,5 +1,17 @@
 Revision history for Class-DBI-FormBuilder
 
+0.32   Wed  29 Jun, 2005 15:00
+        - lots of refactoring in form_* methods
+        - fixed disappearance of has_many fields
+        - as_form_with_related seems to be rendering forms correctly now
+            - except for multiple pk hidden fields bug
+            (haven't tried processing submitted forms yet)
+        - added plugin architecture (by James Tolley)
+        - added dependency on UNIVERSAL::require
+
+0.31   Tues 28 Jun, 2005 15:00
+        - as_form_with_related getting better
+
 0.3_1  Tues 28 Jun, 2005 10:00
         - first code for as_form_with_related     
         - new dependency on List::Util
