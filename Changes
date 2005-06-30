@@ -1,5 +1,11 @@
 Revision history for Class-DBI-FormBuilder
 
+0.33   Thur 30 Jun, 2005 11:00
+        - some pod formatting fixes
+        - spot of refactoring inside _splice_form
+        - basic untested brobably broken update_from_form_with_related() added
+        - multiple pk hidden fields bug still not fixed
+
 0.32   Wed  29 Jun, 2005 15:00
         - lots of refactoring in form_* methods
         - fixed disappearance of has_many fields

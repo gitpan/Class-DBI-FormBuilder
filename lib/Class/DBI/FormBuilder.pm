@@ -13,7 +13,7 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.32';
+our $VERSION = '0.33';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 
@@ -53,6 +53,8 @@ sub import
                      as_form_with_related
                      
                      update_or_create_from_form
+                     
+                     update_from_form_with_related
                      
                      retrieve_from_form
                      search_from_form 
@@ -195,7 +197,7 @@ sub as_form
     return __PACKAGE__->_make_form( $proto, $orig, %args );
 }
 
-=for info
+=begin notes
 
 It's impossible to know whether pk data are expected in the submitted data or not. For instance, 
 while processing a form submission:
@@ -208,6 +210,8 @@ while processing a form submission:
 pk hidden fields are always present in rendered forms, but may be empty (submits undef). undef does not 
 pass validation tests. The solution is to place pk fields in 'keepextras', not in 'fields'. That means they 
 are not validated at all. The only (I think) place submitted pk data are used is in retrieve_from_form
+
+=end notes
 
 =cut
 
@@ -333,8 +337,6 @@ sub as_form_with_related
         __PACKAGE__->_splice_form( $_, $parent_form, $field, $related_args->{ $field }, $rel_type ) for @relateds;
     }
     
-    #die "Got rels: @_rels";
-    
     return $parent_form;
 }
 
@@ -361,11 +363,14 @@ sub _fields_and_has_many_accessors
 }
         
 # Add fields representing related class/object $them, to $parent_form, which represents 
-# the class/object as_form_with_related was called on. E.g. add brewry, style, and many pubs 
+# the class/object as_form_with_related was called on. E.g. add brewery, style, and many pubs 
 # to a beer form. 
 sub _splice_form
 {
     my ( $me, $them, $parent_form, $field_name, $args, $rel_type ) = @_;
+    
+    # related pkdata are encoded in the fake field name
+    # XXX 'not sure if pk for related objects is getting added - if so, it should not';
     
     my $related_form = $them->as_form( %$args );
     
@@ -373,31 +378,27 @@ sub _splice_form
     
     my @related_fields;
     
-    foreach my $related_field_name ( map { ''.$_ } $related_form->field )
+    foreach my $related_field ( $related_form->fields )
     {
-        my $related_field = $related_form->{fieldrefs}{ $related_field_name };
+        my $related_field_name = $related_field->name;
         
         my $fake_name = $me->_false_related_field_name( $them, $related_field_name );
         
-        delete $related_field->{_form};
+        $related_field->_form( $parent_form );
         
-        $related_field->{name} = $fake_name; 
+        $related_field->name( $fake_name );  
         
-        $related_field->{_form} = $parent_form;
+        $related_field->label( ucfirst( $moniker ) . ': ' . $related_field_name ) 
+            unless $args->{labels}{ $related_field_name };
         
         $parent_form->{fieldrefs}{ $fake_name } = $related_field;
     
-        $parent_form->field( name  => $fake_name,
-                             label => ucfirst( $moniker ) . ': ' . $related_field_name,
-                             ) 
-                                unless $args->{labels}{ $related_field_name };
-                                
         push @related_fields, $related_field;
     }
 
     my $offset = 0;
     
-    foreach my $parent_field ( @{ $parent_form->{fields} } )
+    foreach my $parent_field ( $parent_form->fields )
     {
         $offset++;
         last if $parent_field->name eq $field_name;        
@@ -567,6 +568,22 @@ sub _encode_class
     
     return "CDBI_$token\_CDBI";   
 }
+
+sub _retrieve_entity_from_fake_fname
+{
+    my ( $me, $fake_field_name ) = @_;
+    
+    my $class = $me->_decode_class( $fake_field_name );
+    
+    my %pk = $me->_decode_pk( $fake_field_name );
+    
+    return $class unless %pk;
+    
+    my $obj = $class->retrieve( %pk );
+
+    return $obj;
+}
+
 # ------------------------------------------------------- end encode / decode field names -----
 
 =item search_form( %args )
@@ -873,7 +890,7 @@ sub form_has_a
     }
 }
 
-=for ref
+=begin notes
 
 package Class::DBI::FormBuilder::Plugin::Time::Piece;
 use strict;
@@ -915,7 +932,7 @@ sub field
                   );
 }
 
-=cut
+=end notes
 
 =item form_has_many 
 
@@ -1128,8 +1145,16 @@ sub _run_create
         $cols->{ $col } = $data->{ $col };
     }
     
-    my $obj = $class->create( $cols );    
+    return $me->_create_object( $class, $cols );
+}
+
+sub _create_object
+{
+    my ( $me, $class, $data ) = @_;
     
+    die "_create_object needs a CDBI class, not an object" if ref( $class );
+    
+    my $obj = $class->create( $data );
     # If pk values are created in the database (e.g. in a MySQL AUTO_INCREMENT 
     # column), then they will not be available in the new object. Neither will 
     # anything else, because CDBI discards all data before returning the new 
@@ -1147,7 +1172,7 @@ sub _run_create
     # supply the pk data
     my $id = $obj->_auto_increment_value;
     
-    return $class->retrieve( $id ) || die "Could not retrieve newly created object with ID $id";
+    return $class->retrieve( $id ) || die "Could not retrieve newly created object with ID '$id'";
 }
 
 =item update_from_form( $form )
@@ -1199,6 +1224,97 @@ sub _run_update
     $them->update;
     
     return $them;
+}
+
+=item update_from_form_with_related
+
+Sorry about the name, alternative suggestions welcome.
+
+=cut
+
+sub update_from_form_with_related
+{
+    my $proto = shift;
+    
+    my $them = ref( $proto ) ? $proto : $proto->retrieve_from_form( @_ );
+    
+    Carp::croak "No object found matching submitted primary key data" unless $them;
+    
+    __PACKAGE__->_run_update_from_form_with_related( $them, @_ );
+}
+
+sub _run_update_from_form_with_related
+{
+    my ( $me, $them, $fb ) = @_;
+    
+    return unless $fb->submitted && $fb->validate;
+    
+    # Don't think about relationships. We have form data that can be associated 
+    # with specific objects in different classes, or with the creation of new 
+    # objects in different classes. Just decode the form field names, collect 
+    # each set of data, and send to CDBI 
+    
+    my $struct = $me->_extract_data_from_form_with_related( $them, $fb );
+    
+    # Start with all possible columns. Only ask for the subset represented 
+    # in the form. This allows correct handling of fields that result in 
+    # 'missing' entries in the submitted data - e.g. checkbox groups with 
+    # no item selected will not even appear in the raw request data, but here
+    # they should result in an undef value being sent to the object.
+    warn "will miss has_many mutators by only using columns( 'All' )";
+    foreach my $entity ( keys %$struct )
+    {
+        my $formdata = $struct->{ $entity };
+    
+        my %coldata = map  { $_ => $formdata->{ $_ } } 
+                      grep { exists $formdata->{ $_ } }
+                      $entity->columns( 'All' );
+    
+        if ( ref $entity )
+        {
+            $entity->set( %coldata );
+            
+            $entity->update;
+        }
+        else
+        {
+            my $class = $entity;
+            
+            $entity = $me->_create_object( $class, \%coldata );
+            
+            $struct->{ $entity } = delete $struct->{ $class };
+        }
+    }
+    
+    return $them;
+}
+
+sub _extract_data_from_form_with_related
+{
+    my ( $me, $them, $fb ) = @_;
+
+    my $formdata = $fb->fields;
+    
+    my $struct;
+    
+    foreach my $field ( keys %$formdata )
+    {
+        my $real_field_name = $me->_real_related_field_name( $field );
+        
+        if ( $real_field_name eq $field )
+        {
+            $struct->{ $them }->{ $field } = $formdata->{ $field };
+        }
+        else
+        {
+            # class or object
+            my $related = $me->_retrieve_entity_from_fake_fname( $field );
+            
+            $struct->{ $related }->{ $real_field_name } = $formdata->{ $field };
+        }
+    }
+    
+    return $struct;
 }
 
 =item update_or_create_from_form
@@ -1736,12 +1852,13 @@ sub _get_auto_validate_args
 
 C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
 load (via C<require>) an appropriate plugin. For instance, for a C<Time::Piece> column, it will attempt 
-to load C<Class::DBI::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, passing 
+to load C<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, passing 
 the CDBI class for whom the form has been constructed, the form, and the name of the field being processed. 
 The plugin can use this information to modify the form, perhaps adding extra fields, or controlling 
 stringification, or setting up custom validation. 
 
-If no plugin is found, a fatal exception is raised. 
+If no plugin is found, a fatal exception is raised. If you have a situation where it would be useful to 
+simply stringify the object instead, let me know and I'll make this configurable.
 
 =head1 TODO
 
@@ -1788,6 +1905,9 @@ C<bug-class-dbi-plugin-formbuilder@rt.cpan.org>, or through the web interface at
 L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Class-DBI-Plugin-FormBuilder>.
 I will be notified, and then you'll automatically be notified of progress on
 your bug as I make changes.
+
+Looking at the code (0.32), I suspect updates to has_many accessors are not implemented, since the update
+methods only fetch data for columns( 'All' ), which doesn't include has_many accessors/mutators. 
 
 =head1 ACKNOWLEDGEMENTS
 
