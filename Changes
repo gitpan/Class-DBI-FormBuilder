@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.34   Fri   1 Jul, 2005 16:30
+        - update_from_form_with_related() is beginning to work
+
 0.33   Thur 30 Jun, 2005 11:00
         - some pod formatting fixes
         - spot of refactoring inside _splice_form

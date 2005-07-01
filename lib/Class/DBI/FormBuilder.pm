@@ -13,7 +13,7 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.33';
+our $VERSION = '0.34';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 
@@ -321,8 +321,6 @@ sub as_form_with_related
     
     my $parent_form = $proto->as_form( %args );
     
-    my @_rels;
-    
     foreach my $field ( __PACKAGE__->_fields_and_has_many_accessors( $proto, $parent_form, $show_related ) )
     {
         # object or class
@@ -331,8 +329,6 @@ sub as_form_with_related
         next unless $related;
         
         my @relateds = ref( $related ) eq 'ARRAY' ? @$related : ( $related );
-        
-        push @_rels, @relateds;
         
         __PACKAGE__->_splice_form( $_, $parent_form, $field, $related_args->{ $field }, $rel_type ) for @relateds;
     }
@@ -370,7 +366,10 @@ sub _splice_form
     my ( $me, $them, $parent_form, $field_name, $args, $rel_type ) = @_;
     
     # related pkdata are encoded in the fake field name
-    # XXX 'not sure if pk for related objects is getting added - if so, it should not';
+    warn 'not sure if pk for related objects is getting added - if so, it should not';
+    
+    warn "need to add 'add relatives' button";
+    return unless ref $them; # for now
     
     my $related_form = $them->as_form( %$args );
     
@@ -549,9 +548,11 @@ sub _decode_class
 {
     my ( $me, $fake_field_name ) = @_;
 
-    $fake_field_name =~ /^CDBI_(.+)_CDBI/ || die "no class in fake field name $fake_field_name";
+    $fake_field_name =~ /CDBI_(.+)_CDBI/;
     
     my $class = $1;
+    
+    $class || die "no class in fake field name $fake_field_name";
     
     $class =~ s/\./::/g;
     
@@ -1145,9 +1146,16 @@ sub _run_create
         $cols->{ $col } = $data->{ $col };
     }
     
-    return $me->_create_object( $class, $cols );
+    #return $me->_create_object( $class, $cols );
+    return $class->create( $cols );
 }
 
+=begin crud
+
+# If pk values are created in the database (e.g. in a MySQL AUTO_INCREMENT 
+# column), then they will not be available in the new object. Neither will 
+# anything else, because CDBI discards all data before returning the new 
+# object. 
 sub _create_object
 {
     my ( $me, $class, $data ) = @_;
@@ -1155,10 +1163,7 @@ sub _create_object
     die "_create_object needs a CDBI class, not an object" if ref( $class );
     
     my $obj = $class->create( $data );
-    # If pk values are created in the database (e.g. in a MySQL AUTO_INCREMENT 
-    # column), then they will not be available in the new object. Neither will 
-    # anything else, because CDBI discards all data before returning the new 
-    # object. 
+    
     my @pcs = map { $obj->get( $_ ) } $obj->primary_columns;
     
     my $ok; 
@@ -1166,14 +1171,16 @@ sub _create_object
     
     return $obj if $ok; # every primary column has a value
     
-    die "No pks for new object" unless @pcs == 1; # 1 undef value - we can find it
+    die "No pks for new object $obj" unless @pcs == 1; # 1 undef value - we can find it
     
     # this works for MySQL and SQLite - these may be the only dbs that don't 
-    # supply the pk data
+    # supply the pk data in the first place?
     my $id = $obj->_auto_increment_value;
     
     return $class->retrieve( $id ) || die "Could not retrieve newly created object with ID '$id'";
 }
+
+=end crud
 
 =item update_from_form( $form )
 
@@ -1234,13 +1241,17 @@ Sorry about the name, alternative suggestions welcome.
 
 sub update_from_form_with_related
 {
-    my $proto = shift;
+    my ( $proto, $form ) = @_;
     
-    my $them = ref( $proto ) ? $proto : $proto->retrieve_from_form( @_ );
+    my $them = ref( $proto ) ? $proto : $proto->retrieve_from_form( $form );
     
     Carp::croak "No object found matching submitted primary key data" unless $them;
     
-    __PACKAGE__->_run_update_from_form_with_related( $them, @_ );
+    Carp::croak "Still not an object: $them" unless ref( $them );
+    
+    die "Not a form: $form" unless $form->isa( 'CGI::FormBuilder' );
+    
+    __PACKAGE__->_run_update_from_form_with_related( $them, $form );
 }
 
 sub _run_update_from_form_with_related
@@ -1254,35 +1265,55 @@ sub _run_update_from_form_with_related
     # objects in different classes. Just decode the form field names, collect 
     # each set of data, and send to CDBI 
     
-    my $struct = $me->_extract_data_from_form_with_related( $them, $fb );
+    my $struct = $me->_extract_data_from_form_with_related( $fb );
     
-    # Start with all possible columns. Only ask for the subset represented 
-    # in the form. This allows correct handling of fields that result in 
-    # 'missing' entries in the submitted data - e.g. checkbox groups with 
-    # no item selected will not even appear in the raw request data, but here
-    # they should result in an undef value being sent to the object.
-    warn "will miss has_many mutators by only using columns( 'All' )";
-    foreach my $entity ( keys %$struct )
+    # entries are class names or PARENT, entities are class names or objects
+    # (or no entity for PARENT)
+    foreach my $entry ( keys %$struct )
     {
-        my $formdata = $struct->{ $entity };
+        my $formdata = $struct->{ $entry }->{data};
+        my $entity   = $struct->{ $entry }->{entity}; 
+        
+        # the parent object has no entity in $struct
+        $entity ||= $them;
     
+        # Start with all possible columns. Only ask for the subset represented 
+        # in the form. This allows correct handling of fields that result in 
+        # 'missing' entries in the submitted data - e.g. checkbox groups with 
+        # no item selected will not even appear in the raw request data, but here
+        # they should result in an undef value being sent to the object.
         my %coldata = map  { $_ => $formdata->{ $_ } } 
                       grep { exists $formdata->{ $_ } }
                       $entity->columns( 'All' );
     
         if ( ref $entity )
-        {
+        {   # update something that already exists
+        
+            # XXX hack - this stuff should not be in the form, or should be in cgi_params (maybe)
+            my %pk = map { $_ => 1 } $entity->primary_columns;
+            my $found_pk = 0;
+            $found_pk++ for grep { $pk{ $_ } } keys %coldata;
+            warn sprintf( "Got pk data for '%s' (%s) in formdata", $entity, ref( $entity ) ) 
+                if $found_pk;
+            delete $coldata{ $_ } for keys %pk;
+        
             $entity->set( %coldata );
             
             $entity->update;
         }
         else
-        {
+        {   # create something new
             my $class = $entity;
             
-            $entity = $me->_create_object( $class, \%coldata );
+            $entity = $class->create( \%coldata );
             
-            $struct->{ $entity } = delete $struct->{ $class };
+            # just for tidiness - probably not going to need to keep the struct
+            #$struct->{ $entity } = delete $struct->{ $class };
+            
+            # relate it to parent
+            $me->_setup_relationships_between( $them, $entity ) || 
+                die "failed to set up any relationships between parent '$them' and new object '$entity'";
+            
         }
     }
     
@@ -1291,7 +1322,7 @@ sub _run_update_from_form_with_related
 
 sub _extract_data_from_form_with_related
 {
-    my ( $me, $them, $fb ) = @_;
+    my ( $me, $fb ) = @_;
 
     my $formdata = $fb->fields;
     
@@ -1303,18 +1334,133 @@ sub _extract_data_from_form_with_related
         
         if ( $real_field_name eq $field )
         {
-            $struct->{ $them }->{ $field } = $formdata->{ $field };
+            $struct->{PARENT}{data}{ $field } = $formdata->{ $field };
+            #$struct->{ ref $them }{entity} ||= $them;
         }
         else
         {
             # class or object
             my $related = $me->_retrieve_entity_from_fake_fname( $field );
             
-            $struct->{ $related }->{ $real_field_name } = $formdata->{ $field };
+            my $related_class = ref( $related ) || $related;
+            
+            $struct->{ $related_class }{data}{ $real_field_name } = $formdata->{ $field };
+            $struct->{ $related_class }{entity} ||= $related;
         }
     }
     
     return $struct;
+}
+
+=begin previously
+
+# $them is either the parent object, or a related object or class. 
+# Make sure the parent doesn't get transformed into a class.
+sub _extract_data_from_form_with_related
+{
+    my ( $me, $them, $fb ) = @_;
+
+    my $formdata = $fb->fields;
+    
+    my %pk = map { $_ => 1 } $them->primary_columns;
+    
+    my $struct;
+    
+    foreach my $field ( keys %$formdata )
+    {
+        my $real_field_name = $me->_real_related_field_name( $field );
+        
+        warn "Got pk data (field '$real_field_name' as '$field') for $them in formdata" 
+            if $pk{ $real_field_name };
+        
+        next if $pk{ $real_field_name };
+        
+        if ( $real_field_name eq $field )
+        {
+            $struct->{ ref $them }{data}{ $field } = $formdata->{ $field };
+            $struct->{ ref $them }{entity} ||= $them;
+        }
+        else
+        {
+            # class or object
+            my $related = $me->_retrieve_entity_from_fake_fname( $field );
+            
+            my $related_class = ref( $related ) || $related;
+            
+            $struct->{ $related_class }{data}{ $real_field_name } = $formdata->{ $field };
+            $struct->{ $related_class }{entity} ||= $related;
+        }
+    }
+    
+    return $struct;
+}
+
+=end previously
+
+=cut
+
+# I'm nervous that I can create an object and *then* set up its relationships, 
+# but that seems to be the easiest way to go:
+
+# create new object
+# inspect its meta for relationships back to the parent
+#   if there are any, get the mutator from the meta
+#   call the mutator with the parent as argument
+# then inspect the parent's meta for relationships to the new object
+#   if there are any, get the mutator from the meta
+#   call the mutator with the child as argument
+sub _setup_relationships_between
+{
+    my ( $me, $them, $related ) = @_;
+    
+    die "root object must be an object - got $them"       unless ref( $them );
+    die "related object must be an object - got $related" unless ref( $related );
+    
+    my $made_rels = 0;
+    
+    foreach my $meta_accessor ( $me->_meta_accessors( $related ) )
+    {
+        my ( $related_class, $rel_type ) = $me->_related_class_and_rel_type( $related, $meta_accessor );
+        
+        next unless $related_class && ( ref( $them ) eq $related_class );
+        
+        $related->$meta_accessor( $them );
+        
+        $made_rels++;
+        
+        last;
+    }
+    
+    foreach my $meta_accessor ( $me->_meta_accessors( $them ) )
+    {
+        my ( $related_class, $rel_type ) = $me->_related_class_and_rel_type( $them, $meta_accessor );
+        
+        next unless $related_class && ( ref( $related ) eq $related_class );
+        
+        $them->$meta_accessor( $related );
+        
+        $made_rels++;
+        
+        last;
+    }            
+    
+    return $made_rels;
+}
+
+# like columns( 'All' ), but only for things in meta - so includes has_many accessors, 
+# which don't occur in columns( 'All' ) 
+sub _meta_accessors
+{
+    my ( $me, $them ) = @_;
+    
+    my @accessors;
+    
+    foreach my $rel_type ( keys %{ $them->meta_info } )
+    {
+        push @accessors, keys %{ $them->meta_info( $rel_type ) };
+    }
+
+    return @accessors;
 }
 
 =item update_or_create_from_form
