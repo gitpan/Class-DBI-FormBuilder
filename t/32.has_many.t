@@ -6,7 +6,7 @@ use warnings;
 use Test::More;
 use Test::Exception;
 
-if ( ! require DBD::SQLite2 ) 
+if ( ! DBD::SQLite2->require ) 
 {
     plan skip_all => "Couldn't load DBD::SQLite2";
 }

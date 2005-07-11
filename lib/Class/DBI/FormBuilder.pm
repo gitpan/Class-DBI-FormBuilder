@@ -13,7 +13,7 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.34_1';
+our $VERSION = '0.341';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 
@@ -192,8 +192,6 @@ sub as_form
     
     my ( $orig, %args ) = __PACKAGE__->_get_args( $proto, %args_in );
     
-    warn "as_form args_in: " . Dumper( \%args_in );
-    
     __PACKAGE__->_setup_auto_validation( $proto, \%args );
     
     return __PACKAGE__->_make_form( $proto, $orig, %args );
@@ -270,20 +268,6 @@ sub _db_order_columns
     
     return @{ $them->__grouper->{_groups}->{ $group } };
 } 
-
-# deliberately ugly name to encourage something more generic in future
-# this is similar to the same-named method in Maypole::FB
-# see also _fields_and_has_many_accessors, which does a similar 
-# thing with forms
-sub _has_many_accessors
-{
-    my ( $me, $them ) = @_;
-    
-    # these might *not* be the correct accessor names
-    my @accessors = keys %{ $them->meta_info( 'has_many' ) || {} };
-    
-    return @accessors;
-}
 
 sub _make_form
 {
@@ -1230,85 +1214,19 @@ sub _run_update
     # I think this is now unnecessary (0.4), because pks are in keepextras
     delete $formdata->{ $_ } for map {''.$_} $them->primary_columns;
     
+    # assumes no extra fields in the form
+    #$them->set( %$formdata );
+    
     # Start with all possible columns. Only ask for the subset represented 
     # in the form. This allows correct handling of fields that result in 
     # 'missing' entries in the submitted data - e.g. checkbox groups with 
     # no item selected will not even appear in the raw request data, but here
     # they should result in an undef value being sent to the object.
-    # We need to do this filtering because there can be many-many fields, which 
-    # do not represent columns and would raise an error if we tried to update
-    # the object with them. Otherwise, we could have trusted FB to only give us 
-    # the relevant fields in $formdata and not needed to filter for columns( 'All' )
     my %coldata = map  { $_ => $formdata->{ $_ } } 
                   grep { exists $formdata->{ $_ } }
                   $them->columns( 'All' );
-                  
-    # A has_many relationship means an object is linked to 0..* objects in 
-    # another table, *and* no other object is linked to them. The link is set up 
-    # at the moment the related object is created, via
-    # $brewery->add_to_beers( { name => 'Dark Island', abv => 4.3, etc... } );
-    
-    # Such has_many relationships are not handled by this form, so we can ignore this. 
-    
-    # But the beers <-> pubs relationship is many-many, with a linking table. 
-    # The map in BeerDB::Beer is 'pub' - i.e. calling $beer->pubs fetches BeerDB::HandPump 
-    # objects. $handpump->pub is called on each, and the pub objects returned. 
-    # Similarly, the map in BeerDB::Pub is 'beer': $pub->beers returns beers 
-    # via $handpump->beer
-    
-    # So, to add a link between a beer and a pub, the docs say we can just call
-    # $beer->add_to_pubs( { pub => $pub } )
-    # and it will DTRT - add a new entry in the HandPump table. 
-    # Similarly, cascading deletes will delete the handpump, not the pub/beer on 
-    # the other end of the relationship. 
-                  
-    # this data is assumed to only be primary keys - the objects already exist
-    my %many_many_data = map  { $_ => [ $fb->field( $_ ) ] } 
-                         grep { exists $formdata->{ $_ } }
-                         $me->_has_many_accessors( $them );
-        
-    use Data::Dumper;          
-    warn "Extracted data; " . Dumper( \%coldata );
-    warn "Formdata: " . Dumper( $formdata );
-    warn "has_many data: " . Dumper( \%many_many_data );
     
     $them->set( %coldata );
-    
-    # pubs
-    foreach my $accessor ( keys %many_many_data )
-    {
-        # add_to_pubs
-        my $add_to_accessor = "add_to_$accessor";
-        
-        # e.g. $them isa BeerDB::Beer, and we want to link it to a pub
-        #          $beer->meta_info( has_many => 'pubs' );
-        my $meta = $them->meta_info( has_many => $accessor );
-        
-        # pub
-        my $map = $meta->args->{mapping}->[0];
-        
-        my $foreign_class = $meta->foreign_class                # BeerDB::HandPump
-                                ->meta_info( has_a => $map )   # pub
-                                ->foreign_class;               # BeerDB::Pub
-                                
-        # %pub_ids = map { $_ => 1 } $beer->pubs;
-        my %current_items = map { $_->id => 1 } $them->$accessor;
-        
-        foreach my $item ( @{ $many_many_data{ $accessor } } )
-        {
-            next if $current_items{ $item };
-            
-            # $pub = BeerDB::Pub->retrieve( $x );
-            my $related_object = $foreign_class->retrieve( $item );
-            
-            # $beer->add_to_pubs( { pub => $pub } );
-            $them->$add_to_accessor( { $map => $related_object } );
-            
-    #        eval { $them->$accessor( $has_many_data{ $accessor } ) };
-    #        die "Error calling has_many accessor '$accessor' on '$them' with data " . 
-    #            "'@{ $has_many_data{ $accessor } }': $@" if $@;
-        }
-    }
     
     $them->update;
     
@@ -2130,7 +2048,7 @@ David Baird, C<< <cpan@riverside-cms.co.uk> >>
 
 Please report any bugs or feature requests to
 C<bug-class-dbi-plugin-formbuilder@rt.cpan.org>, or through the web interface at
-L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Class-DBI-Plugin-FormBuilder>.
+L<http://rt.cpan.org/NoAuth/ReportBug.html?Queue=Class-DBI-FormBuilder>.
 I will be notified, and then you'll automatically be notified of progress on
 your bug as I make changes.
 

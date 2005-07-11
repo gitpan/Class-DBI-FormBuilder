@@ -1,11 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
-0.34_1   Fri   1 Jul, 2005 22:15
-        - fixed adding many-many links from standard edit forms (i.e. not 
-            form_with_related). So now, pubs and beers can be added to each 
-            other. 
-        - broke lots of tests
-        
+0.341  Mon  11 Jul, 2005 09:45
+        - fixed rt link
+        - tests now correctly bail if DBD::SQLite2 is not available
 
 0.34   Fri   1 Jul, 2005 16:30
         - update_from_form_with_related() is beginning to work

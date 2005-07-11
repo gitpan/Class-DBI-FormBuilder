@@ -2,17 +2,14 @@
 use strict;
 use warnings;
 
-use Test::More tests => 1;
-#use Test::Exception;
+use Test::More;
 
-
-    
-if ( ! require DBD::SQLite2 ) 
+if ( ! DBD::SQLite2->require ) 
 {
     plan skip_all => "Couldn't load DBD::SQLite2";
 }
 
-#plan tests => 5;
+plan tests => 1;
 
 BEGIN { unlink 'test.db' };
 
