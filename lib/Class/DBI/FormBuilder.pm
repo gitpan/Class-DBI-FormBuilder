@@ -13,7 +13,7 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.344';
+our $VERSION = '0.3441';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 

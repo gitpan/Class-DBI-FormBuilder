@@ -10,7 +10,7 @@ if ( ! DBD::SQLite2->require )
     plan skip_all => "Couldn't load DBD::SQLite2";
 }
 
-plan tests => 9;
+plan tests => 10;
 
 use DBI::Test;
 
@@ -32,9 +32,12 @@ use DBI::Test;
     lives_ok { $html = $form->render };
     
     #
-    # no pk in form
+    # 'no' pk in form
     #
     unlike( $html, qr(var wooble) );
+    # at some point, I'd like to not even have this in the form, but it 'submits' an 
+    # undef, which is fine
+    like( $html, qr(\Q<input id="wooble" name="wooble" type="hidden" />) );
     
     isa_ok( $form, 'CGI::FormBuilder' );
 
@@ -46,8 +49,6 @@ use DBI::Test;
     is_deeply( Class::DBI::FormBuilder->_fb_create_data( 'Wackypk', $form ), $data );
     
     ok( $form->validate );
-    
-    #$form->validate || warn $form->render;
     
     my $obj;
     lives_ok { $obj = Wackypk->create_from_form( $form ) } 'create_from_form';

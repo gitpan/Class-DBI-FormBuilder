@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.3441 Wed  13 Jul, 2005 23:10
+        - an extra test
+
 0.344  Wed  13 Jul, 2005 23:00
         - don't send undefs to create() for columns not represented in form data
 
