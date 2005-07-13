@@ -13,7 +13,7 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.341';
+our $VERSION = '0.342';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 
@@ -211,6 +211,8 @@ pk hidden fields are always present in rendered forms, but may be empty (submits
 pass validation tests. The solution is to place pk fields in 'keepextras', not in 'fields'. That means they 
 are not validated at all. The only (I think) place submitted pk data are used is in retrieve_from_form
 
+UPDATE: - the solution is probably to make pk fields optional, so they get validated if present.
+
 =end notes
 
 =cut
@@ -232,7 +234,7 @@ sub _get_args
                         $me->_db_order_columns( $proto, 'All' )
                         ];
                         
-    $args{keepextras} = [ keys %pk ];
+    push( @{ $args{keepextras} }, keys %pk ) unless ( exists $args{keepextras} && $args{keepextras} == 1 );
     
     # for objects, populate with data
     # nb. don't say $proto->get( $_ ) because $_ may be an accessor installed by a relationship 
@@ -289,6 +291,11 @@ sub _make_form
 }
 
 =item as_form_with_related
+
+B<DEPRECATED>.
+
+B<This method is NOT WORKING, and will be removed from a future version>. The plan is to replace C<as_form> 
+with this code, when it's working properly. 
 
 Builds a form with fields from the target CDBI class/object, plus fields from the related objects. 
 

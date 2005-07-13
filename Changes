@@ -1,5 +1,10 @@
 Revision history for Class-DBI-FormBuilder
 
+0.342  Wed  13 Jul, 2005 10:45
+        - fixed bug where keepextras set by caller were overridden in _get_args
+            (reported by David Kamholz)
+        - added big warning about as_form_with_related to pod.
+
 0.341  Mon  11 Jul, 2005 09:45
         - fixed rt link
         - tests now correctly bail if DBD::SQLite2 is not available
