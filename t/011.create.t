@@ -10,51 +10,54 @@ if ( ! DBD::SQLite2->require )
     plan skip_all => "Couldn't load DBD::SQLite2";
 }
 
-plan tests => 7;
+plan tests => 8;
 
 use DBI::Test;
 
-{
+{   # specify a subset of fields, and check the data sent to create a new object
+
     # Fake a submission request
     $ENV{REQUEST_METHOD} = 'GET';
-    $ENV{QUERY_STRING}   = 'name=Dave&street=NiceStreet&town=1&_submitted=1';
+    $ENV{QUERY_STRING}   = 'name=George&town=1&_submitted=1';
     
-    my $data = { street => 'NiceStreet',
-                 name   => 'Dave',
+    my $data = { name   => 'George',
                  town   => 1,
                  id     => undef,
-                 toys    => undef,
-                 job => undef,
+                 #street => undef,
                  };
                  
-    #Person->form_builder_defaults->{auto_validate}->{debug} = 2;
-
-    my $form = Person->as_form; # ( debug => 3 );
+    # no toys or street
+    my $form = Person->as_form( fields => [ qw(  name town ) ] ); # ( debug => 3 );
     
     isa_ok( $form, 'CGI::FormBuilder' );
-
     is_deeply( scalar $form->field, $data );
     
-    ok( $form->validate );
+    # 
+    # this is the new use case we are testing in this script - there should be no 'street' data
+    # (not even undef) being sent to the db
+    # 
+    is_deeply( Class::DBI::FormBuilder->_fb_create_data( 'Person', $form ), $data );
     
-    #$form->validate || warn $form->render;
+    
+    
+    
+    ok( $form->validate, 'form validates' );
     
     my $obj;
     lives_ok { $obj = Person->create_from_form( $form ) } 'create_from_form';
     
     isa_ok( $obj, 'Class::DBI' );
     
-    my $id = $obj->id;
-    
-    is( $id, 1 ); # test the actual value, since it is used in 02.update.t
+    is( $obj->id, 22 ); 
     
     $data->{town} = 'Trumpton';
     
     my $obj_data = { map { $_ => $obj->$_ || undef } keys %$data };
     
-    $data->{id} = 1;    
+    $data->{id} = 22;    
     is_deeply( $obj_data, $data );
     
-    # fill up the db a bit
-    Person->create_from_form( $form ) for 1 .. 20;
 }    
+
+
+

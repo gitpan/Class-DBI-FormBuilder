@@ -92,7 +92,7 @@ delete $expected{1};  # DaveBaird   - 02
 delete $expected{5};  # Brian       - 06
 
 # Winston
-$expected{24} = $wdata;
+$expected{25} = $wdata;
 
 is_deeply( \%obj_data, \%expected );
 

@@ -42,11 +42,11 @@ isa_ok( $obj, 'Class::DBI' );
 
 my $id = $obj->id;
 
-is( $id, 22 ); # 22 is a new id
+is( $id, 23 ); # 23 is a new id
 
 
 my $obj_data = { map { $_ => $obj->$_ || undef } keys %$data };
-$data->{id} = 22;    
+$data->{id} = 23;    
 $data->{town} = 'Uglyton';
 is_deeply( $obj_data, $data );
 

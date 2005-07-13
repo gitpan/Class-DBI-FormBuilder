@@ -34,7 +34,7 @@ my $obj;
 lives_ok { $obj = Person->find_or_create_from_form( $form ) } 'find_or_create - create';
 isa_ok( $obj, 'Class::DBI' );
 
-$submitted_data->{id} = 24; # new id
+$submitted_data->{id} = 25; # new id
 $submitted_data->{town} = 'London';
 
 my $obj_data = { map { $_ => $obj->$_ || undef } keys %$submitted_data };

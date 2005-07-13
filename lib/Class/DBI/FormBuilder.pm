@@ -13,7 +13,7 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.343';
+our $VERSION = '0.344';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 
@@ -1137,31 +1137,27 @@ sub create_from_form
     
     Carp::croak "create_from_form can only be called as a class method" if ref $class;
     
-    __PACKAGE__->_run_create( $class, $fb );
+    return unless $fb->submitted && $fb->validate;
+    
+    return $class->create( __PACKAGE__->_fb_create_data( $class, $fb ) );
 }
 
-sub _run_create 
+sub _fb_create_data
 {
     my ( $me, $class, $fb ) = @_;
     
-    return unless $fb->submitted && $fb->validate;
-    
-    my $them = bless {}, $class;
-    
     my $cols = {};
-    
-    # this assumes no extra fields in the form
-    #return $class->create( $fb->fields );
     
     my $data = $fb->fields;
     
-    foreach my $col ( map {''.$_} $them->columns('All') ) 
+    foreach my $col ( map {''.$_} $class->columns('All') ) 
     {
+        next unless exists $data->{ $col };
+        
         $cols->{ $col } = $data->{ $col };
     }
-    
-    #return $me->_create_object( $class, $cols );
-    return $class->create( $cols );
+
+    return $cols;
 }
 
 =begin crud
@@ -1979,9 +1975,6 @@ sub _setup_auto_validation
     }
     
     $fb_args->{validate} = $validation;
-    
-    #use Data::Dumper;
-    #warn Dumper( $validation );
     
     return;
 }

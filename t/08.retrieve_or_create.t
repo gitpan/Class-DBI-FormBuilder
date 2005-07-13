@@ -40,7 +40,7 @@ my $obj;
 lives_ok { $obj = Person->retrieve_or_create_from_form( $form ) } 'retrieve_or_create - create';
 isa_ok( $obj, 'Class::DBI' );
 
-$data->{id} = 23; # new id
+$data->{id} = 24; # new id
 $data->{town} = 'Toonton';
 my $obj_data = { map { $_ => $obj->$_ || undef } keys %$data };
 is_deeply( $obj_data, $data );

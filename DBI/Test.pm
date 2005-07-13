@@ -49,5 +49,14 @@
     Person->might_have( job => Job => qw/jobtitle employer salary/ );
 }
 
+{    
+    package Wackypk;
+    use base 'DBI::Test';
+    Wackypk->table("wackypk");
+    # wooble is the pk
+    Wackypk->columns(All => qw/flooble wooble flump poo/);
+    Wackypk->columns(Primary => 'wooble'); # or put wooble 1st in the list above
+}
+
 
 1;

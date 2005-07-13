@@ -47,6 +47,14 @@ DBI::Test->db_Main->do("CREATE TABLE job (
     salary integer
 );");
 
+# 
+DBI::Test->db_Main->do("CREATE TABLE wackypk (
+    wooble integer not null primary key,
+    flooble integer,
+    flump text,
+    poo text
+);");
+
 
 my @towns = ( [ qw( Trumpton 250 150.7 160.8 PlayLand ) ],      # 1
               [ qw( Uglyton  1000000 10.2 8.3 Yuckland ) ],     # 2
