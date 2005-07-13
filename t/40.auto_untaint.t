@@ -40,7 +40,11 @@ $ENV{QUERY_STRING}   = '_submitted=1';
     Person->form_builder_defaults->{auto_validate}->{validate} = { name => [qw(nate jim bob)] };
     
     my $html   = Person->as_form->render;
+    
+    # This changed after moving pks from keepextras to stripping them out of required in 0.343, 
+    # not sure why. 
     like( $html,   qr/\Q(name == null || (name != 'nate' && name != 'jim' && name != 'bob'))\E/ );
+    #like( $html,   qr/\Q(name != null && name != "" && (name != 'nate' && name != 'jim' && name != 'bob'))\E/ );
     
     # and still got a validation function for every column 
     foreach my $col ( qw( name town street ) )

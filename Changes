@@ -1,5 +1,10 @@
 Revision history for Class-DBI-FormBuilder
 
+0.343  Wed  13 Jul, 2005 13:24
+        - previous fix was broken if caller tries to set keepextras to 1. Now 
+            we just croak, the proper fix is to remove pks from validation, or 
+            figure out what fields are required and set that explicitly.
+
 0.342  Wed  13 Jul, 2005 10:45
         - fixed bug where keepextras set by caller were overridden in _get_args
             (reported by David Kamholz)

@@ -13,7 +13,7 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.342';
+our $VERSION = '0.343';
 
 our @BASIC_FORM_MODIFIERS = qw( hidden options file );
 
@@ -233,8 +233,15 @@ sub _get_args
                         #$proto->columns( 'All' ) 
                         $me->_db_order_columns( $proto, 'All' )
                         ];
-                        
-    push( @{ $args{keepextras} }, keys %pk ) unless ( exists $args{keepextras} && $args{keepextras} == 1 );
+    
+    # This is a bug, but the solution is to identify the list of required columns, and ensure 
+    # pks are not included. Taht's non-trivial, because of the auto-validation funkiness.
+    if ( exists( $args{keepextras} ) && ! ( ref( $args{keepextras} ) eq 'ARRAY' ) )
+    {
+        Carp::croak "keepextras can currently only support an arrayref of field names";
+    }
+    
+    push( @{ $args{keepextras} }, keys %pk );
     
     # for objects, populate with data
     # nb. don't say $proto->get( $_ ) because $_ may be an accessor installed by a relationship 
@@ -2052,6 +2059,8 @@ C<_splice_form> needs to handle custom setup for more relationship types.
 David Baird, C<< <cpan@riverside-cms.co.uk> >>
 
 =head1 BUGS
+
+Do not set C<keepextras> to 1. You must set it to a list of field names. 
 
 Please report any bugs or feature requests to
 C<bug-class-dbi-plugin-formbuilder@rt.cpan.org>, or through the web interface at
