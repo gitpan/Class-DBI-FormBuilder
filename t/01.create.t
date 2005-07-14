@@ -22,7 +22,7 @@ use DBI::Test;
     my $data = { street => 'NiceStreet',
                  name   => 'Dave',
                  town   => 1,
-                 id     => undef,
+                 #id     => undef,
                  toys    => undef,
                  job => undef,
                  };
@@ -51,6 +51,7 @@ use DBI::Test;
     $data->{town} = 'Trumpton';
     
     my $obj_data = { map { $_ => $obj->$_ || undef } keys %$data };
+    $obj_data->{id} = $obj->id;
     
     $data->{id} = 1;    
     is_deeply( $obj_data, $data );

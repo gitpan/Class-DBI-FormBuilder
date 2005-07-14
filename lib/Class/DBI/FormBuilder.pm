@@ -13,9 +13,9 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.3441';
+our $VERSION = '0.345';
 
-our @BASIC_FORM_MODIFIERS = qw( hidden options file );
+our @BASIC_FORM_MODIFIERS = qw( pks options file );
 
 our %ValidMap = ( varchar   => 'VALUE',
                   char      => 'VALUE', # includes MySQL enum and set
@@ -273,6 +273,7 @@ sub _db_order_columns
 {
     my ( $me, $them, $group ) = @_;
     
+    # XXX: this may not work for group 'All' ? see email dkamholz 14 Jul 2005 3am
     $group ||= 'All';
     
     return @{ $them->__grouper->{_groups}->{ $group } };
@@ -656,7 +657,9 @@ sub search_form
     
     my ( $orig, %args ) = __PACKAGE__->_get_args( $proto, @_ );
     
-    my $form = __PACKAGE__->_make_form( $proto, $orig, %args );
+    my $cdbi_class = ref( $proto ) || $proto;
+    
+    my $form = __PACKAGE__->_make_form( $cdbi_class, $orig, %args );
     
     # make all selects multiple
     foreach my $field ( $form->field )
@@ -731,15 +734,23 @@ C<form_many_many)>. Your custom methods will be automatically called on the rele
 
 =item form_hidden
 
+Deprecated. Renamed C<form_pks>.
+
+=item form_pks
+
 Ensures primary column fields are included in the form (even if they were not included in the 
 C<fields> list), and hides them.
 
 =cut
 
 # these fields are not in the 'fields' list, but are in 'keepextras'
-sub form_hidden
+sub form_hidden { warn 'form_hidden is deprecated - use form_pks instead'; goto &form_pks }
+
+sub form_pks
 {
     my ( $me, $them, $form ) = @_;
+    
+    return unless ref $them;
     
     foreach my $field ( map {''.$_} $them->primary_columns )
     {

@@ -10,7 +10,7 @@ if ( ! DBD::SQLite2->require )
     plan skip_all => "Couldn't load DBD::SQLite2";
 }
 
-plan tests => 10;
+plan tests => 11;
 
 use DBI::Test;
 
@@ -22,7 +22,7 @@ use DBI::Test;
     my $data = { flooble => 5,
                  flump   => 'dump',
                  poo   => 'shmoo',
-                 wooble     => undef,   # pk
+                 #wooble     => undef,   # pk
                  };
                  
     my $form = Wackypk->as_form; # ( debug => 3 );
@@ -35,9 +35,8 @@ use DBI::Test;
     # 'no' pk in form
     #
     unlike( $html, qr(var wooble) );
-    # at some point, I'd like to not even have this in the form, but it 'submits' an 
-    # undef, which is fine
-    like( $html, qr(\Q<input id="wooble" name="wooble" type="hidden" />) );
+    unlike( $html, qr(\Q<input id="wooble" name="wooble" type="hidden" />) );
+    unlike( $html, qr(name="wooble") );
     
     isa_ok( $form, 'CGI::FormBuilder' );
 

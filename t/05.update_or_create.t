@@ -21,18 +21,19 @@ $ENV{QUERY_STRING}   = 'name=Brian&street=NastyStreet&town=2&_submitted=1';
 my $data = { street => 'NastyStreet',
              name   => 'Brian',
              town   => 2,
-             id     => undef,
+             #id     => undef,
              toys    => undef,
              job => undef,
              };
 
 my $form = Person->as_form;
 
-# this is here just as a proof that there should only be 1 - in 51.related.t I was getting 
+# this is here just as a proof that there should be no pks - in 51.related.t I was getting 
 # 2 id widgets
 my $html = $form->render;
-my @matches = $html =~ /(name="id")/g;
-is( scalar( @matches ), 1 );
+unlike( $html, qr(name="id") );
+#my @matches = $html =~ /(name="id")/g;
+#is( scalar( @matches ), 1 );
 
 is_deeply( scalar $form->field, $data );
 
@@ -46,6 +47,8 @@ is( $id, 23 ); # 23 is a new id
 
 
 my $obj_data = { map { $_ => $obj->$_ || undef } keys %$data };
+$obj_data->{id} = $obj->id;
+
 $data->{id} = 23;    
 $data->{town} = 'Uglyton';
 is_deeply( $obj_data, $data );

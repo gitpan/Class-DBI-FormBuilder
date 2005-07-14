@@ -10,7 +10,7 @@ if ( ! DBD::SQLite2->require )
     plan skip_all => "Couldn't load DBD::SQLite2";
 }
 
-plan tests => 5;
+plan tests => 6;
 
 
 use DBI::Test; # also includes Bar
@@ -22,7 +22,7 @@ $ENV{QUERY_STRING}   = 'name=Scooby&street=SnackStreet&town=3&_submitted=1';
 my $data = { street => 'SnackStreet',
              name   => 'Scooby',
              town   => 3,
-             id     => undef,
+             #id     => undef,
              toys    => undef,
              job => undef,
              };
@@ -31,10 +31,10 @@ my $form = Person->as_form;
 
 is_deeply( scalar $form->field, $data );
 
-# forms build from a class name should include the id field, but with no value, 
-# which has the effect of sending an undef
+# forms built from a class name should include no id field, 
 my $html = $form->render;
-like( $html, qr(<input id="id" name="id" type="hidden" />) );
+unlike( $html, qr(<input id="id" name="id" type="hidden" />) );
+unlike( $html, qr(name="id") );
 
 my $obj;
 lives_ok { $obj = Person->retrieve_or_create_from_form( $form ) } 'retrieve_or_create - create';

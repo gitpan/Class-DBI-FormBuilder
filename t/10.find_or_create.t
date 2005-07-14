@@ -21,7 +21,7 @@ $ENV{QUERY_STRING}   = 'name=Winston&street=DowningStreet&town=4&_submitted=1';
 my $submitted_data = { street => 'DowningStreet',
                        name   => 'Winston',
                        town   => 4,
-                       id     => undef,
+                       #id     => undef,
                        toys    => undef,
                        job => undef,
                        };

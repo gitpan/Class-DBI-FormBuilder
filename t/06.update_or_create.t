@@ -10,7 +10,7 @@ if ( ! DBD::SQLite2->require )
     plan skip_all => "Couldn't load DBD::SQLite2";
 }
 
-plan tests => 4;
+plan tests => 5;
 
 
 use DBI::Test; # also includes Bar
@@ -22,7 +22,7 @@ $ENV{QUERY_STRING}   = 'name=Brian&street=NastyStreet&town=2&id=5&_submitted=1';
 my $data = { street => 'NastyStreet',
              name   => 'Brian',
              town   => 2,
-             id     => 5,
+             #id     => 5,
              toys    => undef,
              job => undef,
              };
@@ -39,7 +39,7 @@ $data->{town} = 'Uglyton';
 my $obj_data = { map { $_ => $obj->$_ || undef } keys %$data };
 is_deeply( $obj_data, $data );
 
-
+is( $obj->id, 5 );
 
 
 

@@ -27,7 +27,7 @@ use DBI::Test; # also includes Bar
     is_deeply( scalar $form->field, { street => undef,
                                       name   => undef,
                                       town   => undef,
-                                      id     => 1,
+                       #               id     => 1,
                                       toys    => undef,
                                       job => undef,
                        #search_opt_order_by => undef,

@@ -38,7 +38,10 @@ use DBI::Test; # also includes Bar
 
     my $form = Person->as_form;
     
-    is_deeply( scalar $form->field, $data );
+    # id is in keepextras
+    my %form_data = %{ scalar $form->field };
+    $form_data{id} = $form->cgi_param( 'id' );
+    is_deeply( \%form_data, $data );
     
     my $obj;
     lives_ok { $obj = Person->retrieve_from_form( $form ) };

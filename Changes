@@ -1,5 +1,11 @@
 Revision history for Class-DBI-FormBuilder
 
+0.345  Thur 14 Jul, 2005 10:00
+        - only add pk fields to forms built for objects, not for 
+            classes or searches. Empty pk hidden fields were being submitted 
+            as empty strings rather than undef in some situations.
+        - renamed form_hidden() to form_pks()    
+
 0.3441 Wed  13 Jul, 2005 23:10
         - an extra test
 
