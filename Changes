@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.3451 Thur 14 Jul, 2005 13:40
+        - removed restriction on setting keepextras to 1
+
 0.345  Thur 14 Jul, 2005 10:00
         - only add pk fields to forms built for objects, not for 
             classes or searches. Empty pk hidden fields were being submitted 

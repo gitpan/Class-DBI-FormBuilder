@@ -13,10 +13,11 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.345';
+our $VERSION = '0.3451';
 
 our @BASIC_FORM_MODIFIERS = qw( pks options file );
 
+# have a look at http://search.cpan.org/~rsavage/DBIx-Admin-TableInfo-1.02/ instead
 our %ValidMap = ( varchar   => 'VALUE',
                   char      => 'VALUE', # includes MySQL enum and set
                   blob      => 'VALUE', # includes MySQL text
@@ -197,26 +198,6 @@ sub as_form
     return __PACKAGE__->_make_form( $proto, $orig, %args );
 }
 
-=begin notes
-
-It's impossible to know whether pk data are expected in the submitted data or not. For instance, 
-while processing a form submission:
-    
-    my $form = My::Class->as_form;
-    
-    my $obj = My::Class->retrieve_from_form( $form );       # needs pk data
-    my $obj = My::Class->find_or_create_from_form( $form ); # does not
-    
-pk hidden fields are always present in rendered forms, but may be empty (submits undef). undef does not 
-pass validation tests. The solution is to place pk fields in 'keepextras', not in 'fields'. That means they 
-are not validated at all. The only (I think) place submitted pk data are used is in retrieve_from_form
-
-UPDATE: - the solution is probably to make pk fields optional, so they get validated if present.
-
-=end notes
-
-=cut
-
 sub _get_args
 {
     my ( $me, $proto, %args_in ) = @_;
@@ -234,14 +215,7 @@ sub _get_args
                         $me->_db_order_columns( $proto, 'All' )
                         ];
     
-    # This is a bug, but the solution is to identify the list of required columns, and ensure 
-    # pks are not included. Taht's non-trivial, because of the auto-validation funkiness.
-    if ( exists( $args{keepextras} ) && ! ( ref( $args{keepextras} ) eq 'ARRAY' ) )
-    {
-        Carp::croak "keepextras can currently only support an arrayref of field names";
-    }
-    
-    push( @{ $args{keepextras} }, keys %pk );
+    push( @{ $args{keepextras} }, keys %pk ) unless ( $args{keepextras} && $args{keepextras} == 1 );
     
     # for objects, populate with data
     # nb. don't say $proto->get( $_ ) because $_ may be an accessor installed by a relationship 
@@ -754,7 +728,7 @@ sub form_pks
     
     foreach my $field ( map {''.$_} $them->primary_columns )
     {
-        my $value = $them->get( $field ) if ref( $them );
+        my $value = $them->get( $field );
         
         $form->field( name => $field,
                       type => 'hidden',
@@ -2063,8 +2037,6 @@ C<_splice_form> needs to handle custom setup for more relationship types.
 David Baird, C<< <cpan@riverside-cms.co.uk> >>
 
 =head1 BUGS
-
-Do not set C<keepextras> to 1. You must set it to a list of field names. 
 
 Please report any bugs or feature requests to
 C<bug-class-dbi-plugin-formbuilder@rt.cpan.org>, or through the web interface at
