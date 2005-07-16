@@ -1,5 +1,18 @@
 Revision history for Class-DBI-FormBuilder
 
+0.3452 Sat  16 Jul, 2005 22:30
+        - half fixed _db_order_columns bug. The internal lookup could die 
+            for the 'All' group if this group was not set up explicitly. 
+            Looks like Maypole (via CDBI::Loader?) normally does set this up 
+            explicitly, but hand-rolled setups normally will not. The fix will 
+            return the columns for the 'All' group (via CDBI->columns( 'All' ) 
+            in non-db order if the group is not defined explicitly.
+            Reported by dkamholz.
+        - highlighted Class::DBI::Plugin::Type issue in GOTCHAS (reported by dkamholz)
+        - add 'our $pager' declaration to pager template (reported by dkamholz)
+        
+        
+
 0.3451 Thur 14 Jul, 2005 13:40
         - removed restriction on setting keepextras to 1
 

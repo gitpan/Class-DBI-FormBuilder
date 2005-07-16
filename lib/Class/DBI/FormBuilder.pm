@@ -13,7 +13,7 @@ use UNIVERSAL::require;
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which.
 
-our $VERSION = '0.3451';
+our $VERSION = '0.3452';
 
 our @BASIC_FORM_MODIFIERS = qw( pks options file );
 
@@ -158,6 +158,21 @@ and C<might_have> relationships. Further relationships can be added by subclassi
 A demonstration app (using L<Maypole::FormBuilder|Maypole::FormBuilder>) can be viewed at 
 
     http://beerfb.riverside-cms.co.uk
+    
+=head1 GOTCHAS
+
+=over 4
+
+=item Class::DBI::Plugin::Type
+
+In almost all cases, you should load L<Class::DBI::Plugin::Type> in your CDBI classes. This is used 
+in the automatic validation setup. If you fail to load it, you will probably get an error similar to 
+
+    Use of 'column_type' is deprecated at <...>/5.8.6/Class/DBI/FormBuilder.pm line 1851. 
+    Use 'has_a' instead.
+    My::CDBI::Class col_name needs an associated class at <...>/5.8.6/Class/DBI/Relationship/HasA.pm line 14 
+    
+=back
 
 =head1 METHODS
 
@@ -247,10 +262,20 @@ sub _db_order_columns
 {
     my ( $me, $them, $group ) = @_;
     
-    # XXX: this may not work for group 'All' ? see email dkamholz 14 Jul 2005 3am
     $group ||= 'All';
+
+    # dkamholz spotted this bug:    
+    # If asked for group 'All', and All was not set up explicitly, the __grouper etc lookup dies with 
+    # Can't use an undefined value as an ARRAY reference at <...>/5.8.6/Class/DBI/FormBuilder.pm line 253.
+    # Maypole *may* be setting up the All group explicitly (via CDBI::Loader?), but generally 
+    # the 'All' group will be implicitly defined by CDBI for 'hand-built' classes. 
     
-    return @{ $them->__grouper->{_groups}->{ $group } };
+    my @cols = eval { @{ $them->__grouper->{_groups}->{ $group } } };
+    
+    # *not* in db order
+    @cols = $them->columns( $group ) unless @cols; # only relevant for group 'All'
+    
+    return @cols;
 } 
 
 sub _make_form
