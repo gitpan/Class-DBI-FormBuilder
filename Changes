@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.3501 Sun  17 Jul, 2005 22:30
+        - POD: re-arranged and fixed a few bits and pieces
+
 0.35   Sun  17 Jul, 2005 15:30
         - implemented field pre-processing architecture
 

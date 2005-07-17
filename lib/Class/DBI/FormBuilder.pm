@@ -18,7 +18,7 @@ use base 'Class::Data::Inheritable';
 # but I need to track down which. UPDATE: the dev version now uses map { $_->name }
 # everywhere.
 
-our $VERSION = '0.35';
+our $VERSION = '0.3501';
 
 our @BASIC_FORM_MODIFIERS = qw( pks options file );
 
@@ -160,7 +160,7 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     use Class::DBI::Plugin::Type;
     
     # POST all forms to server
-    Film->form_builder_defaults( { method => 'post' } );
+    Film->form_builder_defaults->{method} = 'post';
     
     # customise how some fields are built:
     # 'actor' is a has_a field, and the 
@@ -173,10 +173,8 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     Film->form_builder_defaults->{process_fields}->{trailer} = 'FILE';
     
     # These fields must always be submitted for create/update routines
-    Film->columns( Required => qw( foo bar ) );
+    Film->form_builder_defaults->{required} = qw( foo bar );
     
-    # same thing, differently
-    # Film->form_builder_defaults->{required} = [ qw( foo bar ) ];
     
     
     # In a nearby piece of code...
@@ -188,7 +186,7 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     my $search_form = Film->search_form;            # as_form plus a few tweaks
     
     
-    # A fairly complete app:
+    # A fairly complete mini-app:
     
     my $form = Film->as_form( params => $q );       # or $r if mod_perl
     
@@ -248,7 +246,7 @@ in the automatic validation setup. If you fail to load it, you will probably get
 
 =head1 METHODS
 
-All the methods described here are exported into the caller's namespace, except for the form modifiers 
+Almost all the methods described here are exported into the caller's namespace, except for the form modifiers 
 (see below). 
 
 =head2 Form generating methods
@@ -811,128 +809,6 @@ C<form_many_many)>. Your custom methods will be automatically called on the rele
 
 C<has_a> relationships to non-CDBI classes are handled via a plugin mechanism (see below). 
 
-=head3 Customising field construction
-
-Often, the default behaviour will be unsuitable. For instance, a C<has_a> relationship might point to 
-a related table with thousands of records. A popup widget with all these records is probably not useful.  
-Also, it will take a long time to build, so post-processing the form to re-design the field is a 
-poor solution. 
-
-Instead, you can pass an extra C<process_fields> argument in the call to C<as_form> (or you can 
-set it in C<form_builder_defaults>.
-
-=over 4
-
-=item process_fields
-
-This is a hashref, with keys being field names. Values can be:
-
-=over 4
-
-=item Name of a built-in
-
-    HIDDEN              make the field hidden
-    VALUE               display the current value (editable) 
-    DISABLE             display the current value (not editable)
-    FILE                build a file upload widget
-    OPTIONS_FROM_DB     check if the column is constrained to a few values
-    
-C<OPTIONS_FROM_DB> currently only supports MySQL ENUM or SET columns (the latter requires 
-a patch to L<Class::DBI::mysql>, see C<form_options> below). 
-
-=item Reference to a subroutine, or anonymous coderef
-
-The coderef will be passed the L<Class::DBI::FormBuilder> class or subclass, the CDBI class or 
-object, the L<CGI::FormBuilder> form object, and the field name as arguments, and should build the 
-named field. 
-
-=item Package name 
-
-Name of a package with a suitable C<field> subroutine. Gets called with the same arguments as 
-the coderef.
-
-=back
-
-=cut
-
-# ----------------------------------------------------------------- field processor architecture
-
-=item new_field_processor( $processor_name, $coderef or package name )
-
-This method is called on C<Class::DBI::FormBuilder> or a subclass. 
-
-It installs a new field processor, which can then be referred to by name in C<process_fields>, 
-rather than by passing a coderef. This method could also be used to replace the supplied built-in 
-field processors. The new processor must either be a coderef, or the name of a package with a 
-suitable C<field> method.
-
-=back
-
-=cut   
-    
-# install a new default processor that can be referred to by name
-sub new_field_processor
-{
-    my ( $me, $p_name, $p ) = @_;
-    
-    my $coderef = $p if ref( $p ) eq 'CODE';
-    
-    unless ( $coderef )
-    {
-        $p->require || die "Error loading custom field processor package $p: $@";
-        
-        UNIVERSAL::can( $p, 'field' ) or die "$p does not have a field() subroutine";
-        
-        no strict 'refs';
-        $coderef = \&{"$p\::field"};    
-    }
-    
-    $me->field_processors->{ $p_name } = $coderef;    
-}
-
-# use a chain of processors to construct a field
-sub _process_field
-{
-    my ( $me, $them, $form, $field, $process ) = @_;
-    
-    die "No field processors for $field" unless $process;
-    
-    my @chain = ref( $process ) eq 'ARRAY' ? @$process : ( $process );
-    
-    die "No field processors for $field" unless @chain;
-    
-    # pass the form to each sub in the chain and tweak the specified field
-    foreach my $p ( @chain )
-    {
-        my $processor = $me->_get_sub_for( $p );
-        
-        #warn "calling $processor ($p) on $field for $me";
-        
-        $processor->( $me, $them, $form, $field );
-    }
-}
-
-# translate a subref, built-in name, or package name, into a subref
-sub _get_sub_for
-{
-    my ( $me, $processor ) = @_;
-    
-    return $processor if ref( $processor ) eq 'CODE';
-    
-    my $p = $me->field_processors->{ $processor };
-    
-    return $p if $p;
-    
-    # it's a field sub in another class
-    no strict 'refs';
-    $p = \&{"$processor\::field"};    
-    
-    die "No sub for processor $processor" unless $p;
-    
-    return $p;
-}
-# ----------------------------------------------------------------- [end] field processor architecture
-
 =over 4
 
 =item form_hidden
@@ -1325,6 +1201,140 @@ sub _field_options
 }
 
 =back
+
+=head2 Plugins
+
+C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
+load (via C<require>) an appropriate plugin. For instance, for a C<Time::Piece> column, it will attempt 
+to load C<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, passing 
+the CDBI class for whom the form has been constructed, the form, and the name of the field being processed. 
+The plugin can use this information to modify the form, perhaps adding extra fields, or controlling 
+stringification, or setting up custom validation. 
+
+If no plugin is found, a fatal exception is thrown. If you have a situation where it would be useful to 
+simply stringify the object instead, let me know and I'll make this configurable.
+
+=head2 Customising field construction
+
+Often, the default behaviour will be unsuitable. For instance, a C<has_a> relationship might point to 
+a related table with thousands of records. A popup widget with all these records is probably not useful.  
+Also, it will take a long time to build, so post-processing the form to re-design the field is a 
+poor solution. 
+
+Instead, you can pass an extra C<process_fields> argument in the call to C<as_form> (or you can 
+set it in C<form_builder_defaults>).
+
+=over 4
+
+=item process_fields
+
+This is a hashref, with keys being field names. Values can be:
+
+=over 4
+
+=item Name of a built-in
+
+    HIDDEN              make the field hidden
+    VALUE               display the current value (editable) 
+    DISABLE             display the current value (not editable)
+    FILE                build a file upload widget
+    OPTIONS_FROM_DB     check if the column is constrained to a few values
+    
+C<OPTIONS_FROM_DB> currently only supports MySQL ENUM or SET columns (the latter requires 
+a patch to L<Class::DBI::mysql>, see C<form_options> below). You probably won't need to use 
+this explicitly, as it's already used internally. 
+
+=item Reference to a subroutine, or anonymous coderef
+
+The coderef will be passed the L<Class::DBI::FormBuilder> class or subclass, the CDBI class or 
+object, the L<CGI::FormBuilder> form object, and the field name as arguments, and should build the 
+named field. 
+
+=item Package name 
+
+Name of a package with a suitable C<field> subroutine. Gets called with the same arguments as 
+the coderef.
+
+=item Arrayref of the above
+
+Well, it was easy to implement, and maybe it will be useful to build multi-widget 'fields' like 
+date pickers or something. Applies each processor in order. 
+
+=back
+
+=cut
+
+# ----------------------------------------------------------------- field processor architecture
+
+=item new_field_processor( $processor_name, $coderef or package name )
+
+This method is called on C<Class::DBI::FormBuilder> or a subclass. 
+
+It installs a new field processor, which can then be referred to by name in C<process_fields>, 
+rather than by passing a coderef. This method could also be used to replace the supplied built-in 
+field processors. The new processor must either be a coderef, or the name of a package with a 
+suitable C<field> method.
+
+=back
+
+=cut   
+    
+# install a new default processor that can be referred to by name
+sub new_field_processor
+{
+    my ( $me, $p_name, $p ) = @_;
+    
+    my $coderef = $p if ref( $p ) eq 'CODE';
+    
+    unless ( $coderef )
+    {
+        $p->require || die "Error loading custom field processor package $p: $@";
+        
+        UNIVERSAL::can( $p, 'field' ) or die "$p does not have a field() subroutine";
+        
+        no strict 'refs';
+        $coderef = \&{"$p\::field"};    
+    }
+    
+    $me->field_processors->{ $p_name } = $coderef;    
+}
+
+# use a chain of processors to construct a field
+sub _process_field
+{
+    my ( $me, $them, $form, $field, $process ) = @_;
+    
+    my @chain = ref( $process ) eq 'ARRAY' ? @$process : ( $process );
+    
+    # pass the form to each sub in the chain and tweak the specified field
+    foreach my $p ( @chain )
+    {
+        my $processor = $me->_get_sub_for( $p );
+        
+        $processor->( $me, $them, $form, $field );
+    }
+}
+
+# translate a subref, built-in name, or package name, into a subref
+sub _get_sub_for
+{
+    my ( $me, $processor ) = @_;
+    
+    return $processor if ref( $processor ) eq 'CODE';
+    
+    my $p = $me->field_processors->{ $processor };
+    
+    return $p if $p;
+    
+    # it's a field sub in another class
+    no strict 'refs';
+    $p = \&{"$processor\::field"};    
+    
+    die "No sub for processor $processor" unless $p;
+    
+    return $p;
+}
+# ----------------------------------------------------------------- [end] field processor architecture
 
 =head2 Form handling methods
 
@@ -2225,38 +2235,7 @@ sub _get_auto_validate_args
     return %{ $fb_defaults->{auto_validate} };
 }
 
-=head1 Plugins
-
-C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
-load (via C<require>) an appropriate plugin. For instance, for a C<Time::Piece> column, it will attempt 
-to load C<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, passing 
-the CDBI class for whom the form has been constructed, the form, and the name of the field being processed. 
-The plugin can use this information to modify the form, perhaps adding extra fields, or controlling 
-stringification, or setting up custom validation. 
-
-If no plugin is found, a fatal exception is raised. If you have a situation where it would be useful to 
-simply stringify the object instead, let me know and I'll make this configurable.
-
 =head1 TODO
-
-Subclassing is not the way to customise behaviour for related fields, and plugins are fine for 
-non-CDBI related fields, but rapidly get clumsy for customising the behaviour of CDBI related fields. 
-Currently thinking about a new entry in the C<as_form> arguments hash, along the lines of 
-
-    process_fields => { foo_field => sub { my ( $me, $them, $form ) = @_; ... do stuff ... },
-                        bar_field => 'DISABLED',  # built-in - show current value in greyed-out textfield
-                        baz_field => 'VALUE',     # built-in - show current value in textfield
-                                                            
-                        # like a plugin - calls Some::Class->field( $them, $form, $field )
-                        gub_field => 'Some::Class',
-
-                        # this one first runs the normal form_*, then tweaks it, could have several in the chain
-                        boo_field => [ 'DEFAULT', sub { my ( $me, $them, $form ) = @_; ... do stuff ... } ],
-
-                        },
-
-
-Improve subclassability (see Bugs).
 
 Better merging of attributes. For instance, it'd be nice to set some field attributes 
 (e.g. size or type) in C<form_builder_defaults>, and not lose them when the fields list is 
@@ -2270,11 +2249,6 @@ Detect binary data and build a file upload widget.
 C<is_a> relationships.
 
 C<enum> and C<set> equivalent column types in other dbs.
-
-Think about non-CDBI C<has_a> inflation/deflation. In particular, maybe there's a Better 
-Way than subclassing to add C<form_*> methods. For instance, adding a date-picker widget 
-to deal with DateTime objects. B<UPDATE>: the new plugin architecture added in 0.32 should 
-handle this.
 
 Figure out how to build a form for a related column when starting from a class, not an object
 (pointed out by Peter Speltz). E.g. 
@@ -2310,6 +2284,10 @@ methods only fetch data for columns( 'All' ), which doesn't include has_many acc
 =head1 ACKNOWLEDGEMENTS
 
 James Tolley for providing the plugin code.
+
+Ron McClain for useful discussions and bug reports.
+
+David Kamholz for useful discussions and bug reports.
 
 =head1 COPYRIGHT & LICENSE
 
