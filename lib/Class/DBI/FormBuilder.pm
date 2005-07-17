@@ -9,11 +9,16 @@ use CGI::FormBuilder 3;
 
 use UNIVERSAL::require;
 
+use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3 };
+
+use base 'Class::Data::Inheritable';
+
 # C::FB sometimes gets confused when passed CDBI::Column objects as field names, 
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
-# but I need to track down which.
+# but I need to track down which. UPDATE: the dev version now uses map { $_->name }
+# everywhere.
 
-our $VERSION = '0.3452';
+our $VERSION = '0.35';
 
 our @BASIC_FORM_MODIFIERS = qw( pks options file );
 
@@ -40,6 +45,58 @@ our %ValidMap = ( varchar   => 'VALUE',
                   numeric   => 'NUM',
                   );    
                   
+__PACKAGE__->mk_classdata( field_processors => {} );
+                  
+{
+    my $built_ins = { # default in form_pks
+                      HIDDEN => sub { $_[FORM]->field( name  => $_[FIELD],
+                                                       type  => 'hidden',
+                                                       value => $_[THEM]->get( $_[FIELD] ),
+                                                       ) },
+                      
+                      VALUE => sub { $_[FORM]->field( name  => $_[FIELD],
+                                                      #type  => 'textfield',
+                                                      value => $_[THEM]->get( $_[FIELD] ),
+                                                      ) },
+                      
+                      DISABLED => sub { $_[FORM]->field( name  => $_[FIELD],
+                                                         # type  => 'hidden',
+                                                         value => $_[THEM]->get( $_[FIELD] ),
+                                                         disabled => 1,
+                                                         ) },
+                                                         
+                      FILE => sub 
+                      { 
+                          my $value = $_[THEM]->get( $_[FIELD] ) if ref( $_[THEM] );
+                          
+                          $_[FORM]->field( name  => $_[FIELD],
+                                           type  => 'file',
+                                           value => $value,
+                                           );
+                      },
+                      
+                      # default in form_options
+                      OPTIONS_FROM_DB => sub 
+                      {    
+                          my ( $series, $multiple ) = 
+                              $_[ME]->_get_col_options_for_enumlike( $_[THEM], $_[FIELD] );
+                        
+                          return unless @$series;
+                        
+                          my $value = $_[THEM]->get( $_[FIELD] ) if ref( $_[THEM] );
+                        
+                          $_[FORM]->field( name      => $_[FIELD],
+                                           options   => $series,
+                                           multiple  => $multiple,
+                                           value     => $value,
+                                           );
+                      },
+                                                         
+                      };
+                      
+    __PACKAGE__->field_processors( $built_ins );    
+}
+    
 sub import
 {
     my ( $class, %args ) = @_;
@@ -47,6 +104,11 @@ sub import
     my $caller = caller(0);
     
     $caller->can( 'form_builder_defaults' ) || $caller->mk_classdata( 'form_builder_defaults', {} );
+    
+    # To support subclassing, store the FB (sub)class on the caller, and use that whenever we need
+    # to call an internal method on the CDBI::FB class 
+    # i.e. say $them->__form_builder_subclass__ instead of __PACKAGE__
+    $caller->mk_classdata( __form_builder_subclass__ => $class );
     
     my @export = qw( as_form 
                      search_form
@@ -77,7 +139,7 @@ sub import
     }
     
     no strict 'refs';
-    *{"$caller\::$_"} = \&$_ for @export;
+    *{"$caller\::$_"} = \&$_ for @export;  
 }
 
 =head1 NAME
@@ -99,6 +161,16 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     
     # POST all forms to server
     Film->form_builder_defaults( { method => 'post' } );
+    
+    # customise how some fields are built:
+    # 'actor' is a has_a field, and the 
+    # related table has 1000's of rows, so we don't want the default popup widget,
+    # we just want to show the current value
+    Film->form_builder_defaults->{process_fields}->{actor} = 'VALUE';
+    
+    # 'trailer' stores an mpeg file, but CDBI::FB cannot automatically detect 
+    # file upload fields, so need to tell it:
+    Film->form_builder_defaults->{process_fields}->{trailer} = 'FILE';
     
     # These fields must always be submitted for create/update routines
     Film->columns( Required => qw( foo bar ) );
@@ -206,11 +278,13 @@ sub as_form
 {
     my ( $proto, %args_in ) = @_;
     
-    my ( $orig, %args ) = __PACKAGE__->_get_args( $proto, %args_in );
+    my $cdbifb = $proto->__form_builder_subclass__;
     
-    __PACKAGE__->_setup_auto_validation( $proto, \%args );
+    my ( $orig, %args ) = $cdbifb->_get_args( $proto, %args_in );
     
-    return __PACKAGE__->_make_form( $proto, $orig, %args );
+    $cdbifb->_setup_auto_validation( $proto, \%args );
+    
+    return $cdbifb->_make_form( $proto, $orig, %args );
 }
 
 sub _get_args
@@ -247,7 +321,7 @@ sub _get_args
         $args{required} = \@reqd;
     }
     
-    # take care that anything in here is copied
+    # take care that anything in here is copied, not a reference
     my $orig = { fields => $original_fields };
     
     return $orig, %args;
@@ -282,6 +356,8 @@ sub _make_form
 {
     my ( $me, $them, $orig, %args ) = @_;
     
+    my $pre_process = delete( $args{process_fields} ) || {};
+    
     my $form = CGI::FormBuilder->new( %args );
     
     $form->{__cdbi_original_args__} = $orig;
@@ -291,7 +367,7 @@ sub _make_form
     {
         my $form_modify = "form_$modify";
         
-        $me->$form_modify( $them, $form );
+        $me->$form_modify( $them, $form, $pre_process );
     }
     
     return $form;
@@ -330,21 +406,23 @@ sub as_form_with_related
 {
     my ( $proto, %args ) = @_;
     
+    my $cdbifb = $proto->__form_builder_subclass__;
+    
     my $related_args = delete( $args{related} );
     my $show_related = delete( $args{show_related} ) || [];
     
     my $parent_form = $proto->as_form( %args );
     
-    foreach my $field ( __PACKAGE__->_fields_and_has_many_accessors( $proto, $parent_form, $show_related ) )
+    foreach my $field ( $cdbifb->_fields_and_has_many_accessors( $proto, $parent_form, $show_related ) )
     {
         # object or class
-        my ( $related, $rel_type ) = __PACKAGE__->_related( $proto, $field );
+        my ( $related, $rel_type ) = $cdbifb->_related( $proto, $field );
         
         next unless $related;
         
         my @relateds = ref( $related ) eq 'ARRAY' ? @$related : ( $related );
         
-        __PACKAGE__->_splice_form( $_, $parent_form, $field, $related_args->{ $field }, $rel_type ) for @relateds;
+        $cdbifb->_splice_form( $_, $parent_form, $field, $related_args->{ $field }, $rel_type ) for @relateds;
     }
     
     return $parent_form;
@@ -654,11 +732,13 @@ sub search_form
 {
     my $proto = shift;
     
-    my ( $orig, %args ) = __PACKAGE__->_get_args( $proto, @_ );
+    my $cdbifb = $proto->__form_builder_subclass__;
+    
+    my ( $orig, %args ) = $cdbifb->_get_args( $proto, @_ );
     
     my $cdbi_class = ref( $proto ) || $proto;
     
-    my $form = __PACKAGE__->_make_form( $cdbi_class, $orig, %args );
+    my $form = $cdbifb->_make_form( $cdbi_class, $orig, %args );
     
     # make all selects multiple
     foreach my $field ( $form->field )
@@ -729,6 +809,130 @@ select-type columns for MySQL databases.
 You can handle new relationship types by subclassing, and writing suitable C<form_*> methods (e.g. 
 C<form_many_many)>. Your custom methods will be automatically called on the relevant fields. 
 
+C<has_a> relationships to non-CDBI classes are handled via a plugin mechanism (see below). 
+
+=head3 Customising field construction
+
+Often, the default behaviour will be unsuitable. For instance, a C<has_a> relationship might point to 
+a related table with thousands of records. A popup widget with all these records is probably not useful.  
+Also, it will take a long time to build, so post-processing the form to re-design the field is a 
+poor solution. 
+
+Instead, you can pass an extra C<process_fields> argument in the call to C<as_form> (or you can 
+set it in C<form_builder_defaults>.
+
+=over 4
+
+=item process_fields
+
+This is a hashref, with keys being field names. Values can be:
+
+=over 4
+
+=item Name of a built-in
+
+    HIDDEN              make the field hidden
+    VALUE               display the current value (editable) 
+    DISABLE             display the current value (not editable)
+    FILE                build a file upload widget
+    OPTIONS_FROM_DB     check if the column is constrained to a few values
+    
+C<OPTIONS_FROM_DB> currently only supports MySQL ENUM or SET columns (the latter requires 
+a patch to L<Class::DBI::mysql>, see C<form_options> below). 
+
+=item Reference to a subroutine, or anonymous coderef
+
+The coderef will be passed the L<Class::DBI::FormBuilder> class or subclass, the CDBI class or 
+object, the L<CGI::FormBuilder> form object, and the field name as arguments, and should build the 
+named field. 
+
+=item Package name 
+
+Name of a package with a suitable C<field> subroutine. Gets called with the same arguments as 
+the coderef.
+
+=back
+
+=cut
+
+# ----------------------------------------------------------------- field processor architecture
+
+=item new_field_processor( $processor_name, $coderef or package name )
+
+This method is called on C<Class::DBI::FormBuilder> or a subclass. 
+
+It installs a new field processor, which can then be referred to by name in C<process_fields>, 
+rather than by passing a coderef. This method could also be used to replace the supplied built-in 
+field processors. The new processor must either be a coderef, or the name of a package with a 
+suitable C<field> method.
+
+=back
+
+=cut   
+    
+# install a new default processor that can be referred to by name
+sub new_field_processor
+{
+    my ( $me, $p_name, $p ) = @_;
+    
+    my $coderef = $p if ref( $p ) eq 'CODE';
+    
+    unless ( $coderef )
+    {
+        $p->require || die "Error loading custom field processor package $p: $@";
+        
+        UNIVERSAL::can( $p, 'field' ) or die "$p does not have a field() subroutine";
+        
+        no strict 'refs';
+        $coderef = \&{"$p\::field"};    
+    }
+    
+    $me->field_processors->{ $p_name } = $coderef;    
+}
+
+# use a chain of processors to construct a field
+sub _process_field
+{
+    my ( $me, $them, $form, $field, $process ) = @_;
+    
+    die "No field processors for $field" unless $process;
+    
+    my @chain = ref( $process ) eq 'ARRAY' ? @$process : ( $process );
+    
+    die "No field processors for $field" unless @chain;
+    
+    # pass the form to each sub in the chain and tweak the specified field
+    foreach my $p ( @chain )
+    {
+        my $processor = $me->_get_sub_for( $p );
+        
+        #warn "calling $processor ($p) on $field for $me";
+        
+        $processor->( $me, $them, $form, $field );
+    }
+}
+
+# translate a subref, built-in name, or package name, into a subref
+sub _get_sub_for
+{
+    my ( $me, $processor ) = @_;
+    
+    return $processor if ref( $processor ) eq 'CODE';
+    
+    my $p = $me->field_processors->{ $processor };
+    
+    return $p if $p;
+    
+    # it's a field sub in another class
+    no strict 'refs';
+    $p = \&{"$processor\::field"};    
+    
+    die "No sub for processor $processor" unless $p;
+    
+    return $p;
+}
+# ----------------------------------------------------------------- [end] field processor architecture
+
 =over 4
 
 =item form_hidden
@@ -747,21 +951,19 @@ sub form_hidden { warn 'form_hidden is deprecated - use form_pks instead'; goto 
 
 sub form_pks
 {
-    my ( $me, $them, $form ) = @_;
+    my ( $me, $them, $form, $pre_process ) = @_;
     
     return unless ref $them;
     
     foreach my $field ( map {''.$_} $them->primary_columns )
     {
-        my $value = $them->get( $field );
+        my $process = $pre_process->{ $field } || 'HIDDEN';
         
-        $form->field( name => $field,
-                      type => 'hidden',
-                      value => $value,
-                      );
+        $me->_process_field( $them, $form, $field, $process );
     }
 }
 
+    
 =item form_options
 
 Identifies column types that should be represented as select, radiobutton or 
@@ -780,23 +982,16 @@ be emulated.
 
 sub form_options
 {
-    my ( $me, $them, $form ) = @_;
+    my ( $me, $them, $form, $pre_process ) = @_;
     
     foreach my $field ( map {''.$_} $them->columns('All') )
     {
         next unless exists $form->field->{ $field }; # $form->field( name => $field );
         
-        my ( $series, $multiple ) = $me->_get_col_options_for_enumlike( $them, $field );
+        # OPTIONS_FROM_DB is a no-op if the db column isn't enum or set
+        my $process = $pre_process->{ $field } || 'OPTIONS_FROM_DB';
         
-        next unless @$series;
-        
-        my $value = $them->get( $field ) if ref( $them );
-        
-        $form->field( name      => $field,
-                      options   => $series,
-                      multiple  => $multiple,
-                      value     => $value,
-                      );
+        $me->_process_field( $them, $form, $field, $process );
     }    
 }
 
@@ -821,9 +1016,13 @@ sub _get_col_options_for_enumlike
 
 =item form_file
 
-B<Unimplemented> - at the moment, you need to set the field type to C<file> manually. 
+B<Unimplemented> - at the moment, you need to set the field type to C<file> manually, or 
+in the C<process_fields> argument, set the field to C<FILE>.
 
 Figures out if a column contains file data. 
+
+This method will probably go away at some point, unless somebody can show me how to automatically 
+detect that a column stores binary data. 
 
 =cut
 
@@ -853,7 +1052,7 @@ If the relationship is to a non-CDBI class, loads a plugin to handle the field (
 
 sub form_has_a
 {
-    my ( $me, $them, $form ) = @_;
+    my ( $me, $them, $form, $pre_process ) = @_;
     
     my $meta = $them->meta_info( 'has_a' ) || return;
     
@@ -863,6 +1062,11 @@ sub form_has_a
     {
         #$me->_set_field_options( $them, $form, $field, { required => 1 } ) || next;
         next unless exists $form->field->{ $field };
+        
+        # if a custom field processor has been supplied, use that
+        my $processor = $pre_process->{ $field };
+        $me->_process_field( $them, $form, $field, $processor ) if $processor;
+        next if $processor;        
         
         my ( $related_class, undef ) = $me->_related_class_and_rel_type( $them, $field );
         
@@ -967,7 +1171,7 @@ Also assumes a single primary column.
 
 sub form_has_many
 {
-    my ( $me, $them, $form ) = @_;
+    my ( $me, $them, $form, $pre_process ) = @_;
     
     my $meta = $them->meta_info( 'has_many' ) || return;
     
@@ -990,6 +1194,11 @@ sub form_has_many
         # the 'next' condition is not tested because @wanted lists fields that probably 
         # don't exist yet, but should
         #next unless exists $form->field->{ $field };
+        
+        # if a custom field processor has been supplied, use that
+        my $processor = $pre_process->{ $field };
+        $me->_process_field( $them, $form, $field, $processor ) if $processor;
+        next if $processor;        
         
         my $options = $me->_field_options( $them, $form, $field ) || 
             die "No options detected for '$them' field '$field'";
@@ -1037,7 +1246,7 @@ Also assumes a single primary column.
 # this code is almost identical to form_has_many
 sub form_might_have
 {
-    my ( $me, $them, $form ) = @_;
+    my ( $me, $them, $form, $pre_process ) = @_;
     
     my $meta = $them->meta_info( 'might_have' ) || return;
     
@@ -1051,6 +1260,11 @@ sub form_might_have
     {
         # the 'next' condition is not tested because @wanted lists fields that probably 
         # don't exist yet, but should
+        
+        # if a custom field processor has been supplied, use that
+        my $processor = $pre_process->{ $field };
+        $me->_process_field( $them, $form, $field, $processor ) if $processor;
+        next if $processor;        
         
         my $options = $me->_field_options( $them, $form, $field ) || 
             die "No options detected for '$them' field '$field'";
@@ -1149,7 +1363,7 @@ sub create_from_form
     
     return unless $fb->submitted && $fb->validate;
     
-    return $class->create( __PACKAGE__->_fb_create_data( $class, $fb ) );
+    return $class->create( $class->__form_builder_subclass__->_fb_create_data( $class, $fb ) );
 }
 
 sub _fb_create_data
@@ -1220,7 +1434,7 @@ sub update_from_form
     
     Carp::croak "No object found matching submitted primary key data" unless $them;
     
-    __PACKAGE__->_run_update( $them, @_ );
+    $proto->__form_builder_subclass__->_run_update( $them, @_ );
 }
 
 sub _run_update 
@@ -1271,7 +1485,7 @@ sub update_from_form_with_related
     
     die "Not a form: $form" unless $form->isa( 'CGI::FormBuilder' );
     
-    __PACKAGE__->_run_update_from_form_with_related( $them, $form );
+    $proto->__form_builder_subclass__->_run_update_from_form_with_related( $them, $form );
 }
 
 sub _run_update_from_form_with_related
@@ -1499,7 +1713,7 @@ sub update_or_create_from_form
     
     Carp::croak "update_or_create_from_form can only be called as a class method" if ref $class;
 
-    __PACKAGE__->_run_update_or_create_from_form( $class, @_ );
+    $class->__form_builder_subclass__->_run_update_or_create_from_form( $class, @_ );
 }
 
 sub _run_update_or_create_from_form
@@ -1542,7 +1756,7 @@ sub retrieve_from_form
     
     Carp::croak "retrieve_from_form can only be called as a class method" if ref $class;
 
-    __PACKAGE__->_run_retrieve_from_form( $class, @_ );
+    $class->__form_builder_subclass__->_run_retrieve_from_form( $class, @_ );
 }
 
 sub _run_retrieve_from_form
@@ -1570,7 +1784,7 @@ sub search_from_form
     
     Carp::croak "search_from_form can only be called as a class method" if ref $class;
 
-    __PACKAGE__->_run_search_from_form( $class, '=', @_ );
+    $class->__form_builder_subclass__->_run_search_from_form( $class, '=', @_ );
 }
 
 =item search_like_from_form
@@ -1587,7 +1801,7 @@ sub search_like_from_form
     
     Carp::croak "search_like_from_form can only be called as a class method" if ref $class;
 
-    __PACKAGE__->_run_search_from_form( $class, 'LIKE', @_ );
+    $class->__form_builder_subclass__->_run_search_from_form( $class, 'LIKE', @_ );
 }
 
 sub _run_search_from_form
@@ -1658,7 +1872,7 @@ sub search_where_from_form
     
     Carp::croak "search_where_from_form can only be called as a class method" if ref $class;
 
-    __PACKAGE__->_run_search_where_from_form( $class, @_ );
+    $class->__form_builder_subclass__->_run_search_where_from_form( $class, @_ );
 }
 
 # have a look at Maypole::Model::CDBI::search()
@@ -1708,7 +1922,7 @@ sub find_or_create_from_form
     
     Carp::croak "find_or_create_from_form can only be called as a class method" if ref $class;
 
-    __PACKAGE__->_run_find_or_create_from_form( $class, @_ );
+    $class->__form_builder_subclass__->_run_find_or_create_from_form( $class, @_ );
 }
 
 sub _run_find_or_create_from_form
@@ -1737,7 +1951,7 @@ sub retrieve_or_create_from_form
     
     Carp::croak "retrieve_or_create_from_form can only be called as a class method" if ref $class;
 
-    __PACKAGE__->_run_retrieve_or_create_from_form( $class, @_ );
+    $class->__form_builder_subclass__->_run_retrieve_or_create_from_form( $class, @_ );
 }
 
 sub _run_retrieve_or_create_from_form
@@ -2025,6 +2239,25 @@ simply stringify the object instead, let me know and I'll make this configurable
 
 =head1 TODO
 
+Subclassing is not the way to customise behaviour for related fields, and plugins are fine for 
+non-CDBI related fields, but rapidly get clumsy for customising the behaviour of CDBI related fields. 
+Currently thinking about a new entry in the C<as_form> arguments hash, along the lines of 
+
+    process_fields => { foo_field => sub { my ( $me, $them, $form ) = @_; ... do stuff ... },
+                        bar_field => 'DISABLED',  # built-in - show current value in greyed-out textfield
+                        baz_field => 'VALUE',     # built-in - show current value in textfield
+                                                            
+                        # like a plugin - calls Some::Class->field( $them, $form, $field )
+                        gub_field => 'Some::Class',
+
+                        # this one first runs the normal form_*, then tweaks it, could have several in the chain
+                        boo_field => [ 'DEFAULT', sub { my ( $me, $them, $form ) = @_; ... do stuff ... } ],
+
+                        },
+
+
+Improve subclassability (see Bugs).
+
 Better merging of attributes. For instance, it'd be nice to set some field attributes 
 (e.g. size or type) in C<form_builder_defaults>, and not lose them when the fields list is 
 generated and added to C<%args>. 
@@ -2054,6 +2287,8 @@ will not work if $object is a class. Have a look at Maypole::Model::CDBI::relate
 
 Integrate fields from a related class object into the same form (e.g. show address fields 
 in a person form, where person has_a address). B<UPDATE>: fairly well along in 0.32 (C<as_form_with_related>).
+B<UPDATE>: as_form_with_related() is deprecated (and still not working) Once it works properly, it 
+will be merged into C<as_form>. 
 
 C<_splice_form> needs to handle custom setup for more relationship types. 
 

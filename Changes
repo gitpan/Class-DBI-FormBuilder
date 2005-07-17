@@ -1,5 +1,12 @@
 Revision history for Class-DBI-FormBuilder
 
+0.35   Sun  17 Jul, 2005 15:30
+        - implemented field pre-processing architecture
+
+0.3453 Sun  17 Jul, 2005 13:30
+        - improved subclassability by storing the CDBI::FB (sub)class on the 
+            caller, and then using that instead of __PACKAGE__
+
 0.3452 Sat  16 Jul, 2005 22:30
         - half fixed _db_order_columns bug. The internal lookup could die 
             for the 'All' group if this group was not set up explicitly. 
