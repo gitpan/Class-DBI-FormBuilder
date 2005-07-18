@@ -18,7 +18,7 @@ use base 'Class::Data::Inheritable';
 # but I need to track down which. UPDATE: the dev version now uses map { $_->name }
 # everywhere.
 
-our $VERSION = '0.3501';
+our $VERSION = '0.3502';
 
 our @BASIC_FORM_MODIFIERS = qw( pks options file );
 
@@ -338,14 +338,28 @@ sub _db_order_columns
 
     # dkamholz spotted this bug:    
     # If asked for group 'All', and All was not set up explicitly, the __grouper etc lookup dies with 
-    # Can't use an undefined value as an ARRAY reference at <...>/5.8.6/Class/DBI/FormBuilder.pm line 253.
+    # Can't use an undefined value as an ARRAY reference at <...>/5.8.6/Class/DBI/FormBuilder.pm line xxx.
     # Maypole *may* be setting up the All group explicitly (via CDBI::Loader?), but generally 
     # the 'All' group will be implicitly defined by CDBI for 'hand-built' classes. 
     
     my @cols = eval { @{ $them->__grouper->{_groups}->{ $group } } };
     
-    # *not* in db order
-    @cols = $them->columns( $group ) unless @cols; # only relevant for group 'All'
+    my $er = $@;
+    
+    # only relevant for group 'All', and only if it was not defined explicitly
+    if ( $er =~ /\QCan't use an undefined value as an ARRAY reference/ )
+    {
+        # *not* in db order
+        @cols = $them->columns( $group ); # XXX: bug - this is *still* empty for the 'All' group
+        
+        # if not cleared, this causes the $@ test after the eval in _get_args to fail
+        # see 98.misc.t
+        undef $@;  
+    }
+    elsif ( $er )
+    {   
+        die "Unexpected error retrieving column list for '$group' group: $er";
+    }
     
     return @cols;
 } 

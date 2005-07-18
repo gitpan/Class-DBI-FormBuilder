@@ -1,5 +1,11 @@
 Revision history for Class-DBI-FormBuilder
 
+0.3502 Mon  18 Jul, 2005 23:15
+        - added test for _db_order_columns fatal error when looking up 
+            implicitly defined 'All' column group. Still returns an empty list, 
+            so haven't got this one figured out yet, but at least the $@ is not 
+            being propagated further than expected.
+
 0.3501 Sun  17 Jul, 2005 22:30
         - POD: re-arranged and fixed a few bits and pieces
 
