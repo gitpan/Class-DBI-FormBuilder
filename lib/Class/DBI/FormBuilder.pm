@@ -18,7 +18,7 @@ use base 'Class::Data::Inheritable';
 # but I need to track down which. UPDATE: the dev version now uses map { $_->name }
 # everywhere.
 
-our $VERSION = '0.3502';
+our $VERSION = '0.351';
 
 our @BASIC_FORM_MODIFIERS = qw( pks options file );
 
@@ -342,26 +342,13 @@ sub _db_order_columns
     # Maypole *may* be setting up the All group explicitly (via CDBI::Loader?), but generally 
     # the 'All' group will be implicitly defined by CDBI for 'hand-built' classes. 
     
-    my @cols = eval { @{ $them->__grouper->{_groups}->{ $group } } };
+    # And in those cases, $them->columns( 'All' ) is turning up empty in tests (98.misc.t), so it's still 
+    # not properly fixed. So we could just say 
+    # return @{ $them->__grouper->{_groups}->{ $group } || [] }
+    # and get the same effect. 
     
-    my $er = $@;
-    
-    # only relevant for group 'All', and only if it was not defined explicitly
-    if ( $er =~ /\QCan't use an undefined value as an ARRAY reference/ )
-    {
-        # *not* in db order
-        @cols = $them->columns( $group ); # XXX: bug - this is *still* empty for the 'All' group
-        
-        # if not cleared, this causes the $@ test after the eval in _get_args to fail
-        # see 98.misc.t
-        undef $@;  
-    }
-    elsif ( $er )
-    {   
-        die "Unexpected error retrieving column list for '$group' group: $er";
-    }
-    
-    return @cols;
+    return exists $them->__grouper->{_groups}->{ $group } ? @{ $them->__grouper->{_groups}->{ $group } } : 
+                                                            $them->columns( $group ); 
 } 
 
 sub _make_form
@@ -1065,13 +1052,7 @@ sub form_has_many
     
     my $meta = $them->meta_info( 'has_many' ) || return;
     
-    my @extras = keys %$meta;
-    
-    my %allowed = map { $_ => 1 } @{ $form->{__cdbi_original_args__}->{fields} || [ @extras ] };
-    
-    my @wanted = grep { $allowed{ $_ } } @extras;
-    
-    #$form->field( name => $_, multiple => 1 ) for @wanted;    
+    my @has_many_fields = $me->_multiplicity_fields( $them, $form, 'has_many' );
     
     # The target class/object ($them) does not have a column for the related class, 
     # so we need to add these to the form, then figure out their options.
@@ -1079,7 +1060,7 @@ sub form_has_many
     # BUT - do not create the new field if it wasn't in the list passed in the original 
     # args, or if [] was passed in the original args. 
     
-    foreach my $field ( @wanted )
+    foreach my $field ( @has_many_fields )
     {
         # the 'next' condition is not tested because @wanted lists fields that probably 
         # don't exist yet, but should
@@ -1140,13 +1121,9 @@ sub form_might_have
     
     my $meta = $them->meta_info( 'might_have' ) || return;
     
-    my @extras = keys %$meta;
+    my @might_have_fields = $me->_multiplicity_fields( $them, $form, 'might_have' );
     
-    my %allowed = map { $_ => 1 } @{ $form->{__cdbi_original_args__}->{fields} || [ @extras ] };
-    
-    my @wanted = grep { $allowed{ $_ } } @extras;
-    
-    foreach my $field ( @wanted ) 
+    foreach my $field ( @might_have_fields ) 
     {
         # the 'next' condition is not tested because @wanted lists fields that probably 
         # don't exist yet, but should
@@ -1188,6 +1165,29 @@ sub form_might_have
                       options  => $options,
                       );
     }
+}
+
+# Returns fields (in random order) that represent has_many or might_have relationships. 
+# Note that if any of these fields are specified in __cdbi_original_args__, the order will be 
+# preserved elsewhere during form construction.
+sub _multiplicity_fields
+{
+    my ( $me, $them, $form, $rel ) = @_;
+    
+    die "Bad rel: $rel" unless $rel =~ /^(?:has_many|might_have)$/;
+
+    my $meta = $them->meta_info( $rel ) || return;
+    
+    # @extras are field names that do not exist as columns in the db
+    my @extras = keys %$meta;
+    
+    # if the call to as_form explicitly specified a list of fields, we only return 
+    # fields from @extras that are in that list
+    my %allowed = map { $_ => 1 } @{ $form->{__cdbi_original_args__}->{fields} || [ @extras ] };
+    
+    my @wanted = grep { $allowed{ $_ } } @extras;
+
+    return @wanted;
 }
 
 sub _field_options

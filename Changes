@@ -1,5 +1,11 @@
 Revision history for Class-DBI-FormBuilder
 
+0.351  Wed  20 Jul, 2005 01:00
+        - cleaned up code in _db_order_columns - still not understanding 
+            the empty 'All' group issue though
+        - factored out calculation of field names for form_has_many() and form_might_have() into 
+            _multiplicity_fields()
+
 0.3502 Mon  18 Jul, 2005 23:15
         - added test for _db_order_columns fatal error when looking up 
             implicitly defined 'All' column group. Still returns an empty list, 

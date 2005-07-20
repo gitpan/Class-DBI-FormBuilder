@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name: Class-DBI-FormBuilder
-version: 0.3502
+version: 0.351
 author:
   - David Baird <cpan@riverside-cms.co.uk>
 abstract: Class::DBI/CGI::FormBuilder integration
@@ -17,5 +17,5 @@ requires:
 provides:
   Class::DBI::FormBuilder:
     file: lib/Class/DBI/FormBuilder.pm
-    version: 0.3502
+    version: 0.351
 generated_by: Module::Build version 0.2609
