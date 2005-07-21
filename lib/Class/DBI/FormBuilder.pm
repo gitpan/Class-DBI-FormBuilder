@@ -18,7 +18,7 @@ use base 'Class::Data::Inheritable';
 # but I need to track down which. UPDATE: the dev version now uses map { $_->name }
 # everywhere.
 
-our $VERSION = '0.351';
+our $VERSION = '0.3511';
 
 our @BASIC_FORM_MODIFIERS = qw( pks options file );
 
@@ -32,6 +32,7 @@ our %ValidMap = ( varchar   => 'VALUE',
                   bigint    => 'INT',
                   smallint  => 'INT',
                   tinyint   => 'INT',
+                  int       => 'INT',
                   
                   date      => 'VALUE',
                   time      => 'VALUE',

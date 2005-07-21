@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.3511 Thur 21 Jul, 2005 09:00
+        - added 'int' entry to ValidMap (reported by Dave Kamholz)
+
 0.351  Wed  20 Jul, 2005 01:00
         - cleaned up code in _db_order_columns - still not understanding 
             the empty 'All' group issue though
