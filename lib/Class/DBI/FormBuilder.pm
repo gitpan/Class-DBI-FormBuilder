@@ -18,9 +18,10 @@ use base 'Class::Data::Inheritable';
 # but I need to track down which. UPDATE: the dev version now uses map { $_->name }
 # everywhere.
 
-our $VERSION = '0.3511';
+our $VERSION = '0.4';
 
-our @BASIC_FORM_MODIFIERS = qw( pks options file );
+# process_extras *must* come last
+our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp process_extras );
 
 # have a look at http://search.cpan.org/~rsavage/DBIx-Admin-TableInfo-1.02/ instead
 our %ValidMap = ( varchar   => 'VALUE',
@@ -50,49 +51,81 @@ __PACKAGE__->mk_classdata( field_processors => {} );
                   
 {
     my $built_ins = { # default in form_pks
-                      HIDDEN => sub { $_[FORM]->field( name  => $_[FIELD],
-                                                       type  => 'hidden',
-                                                       value => $_[THEM]->get( $_[FIELD] ),
-                                                       ) },
+                      HIDDEN => [ '+HIDDEN', '+VALUE' ],
                       
-                      VALUE => sub { $_[FORM]->field( name  => $_[FIELD],
-                                                      #type  => 'textfield',
-                                                      value => $_[THEM]->get( $_[FIELD] ),
-                                                      ) },
+                      '+HIDDEN' => sub { $_[FORM]->field( name  => $_[FIELD],
+                                                          type  => 'hidden',
+                                                          ) },
+                                                          
+                      VALUE => '+VALUE',
                       
-                      DISABLED => sub { $_[FORM]->field( name  => $_[FIELD],
-                                                         # type  => 'hidden',
-                                                         value => $_[THEM]->get( $_[FIELD] ),
-                                                         disabled => 1,
-                                                         ) },
-                                                         
-                      FILE => sub 
+                      '+VALUE' => sub { 
+                                my $value;
+                                eval {
+                                     $value = $_[THEM]->get( $_[FIELD] ) if ref( $_[THEM] );
+                                     
+                                     $value &&= ''.$value;  # CGI::FB chokes on objects
+                                     
+                                     $_[FORM]->field( name  => $_[FIELD],
+                                                      value => $value,   
+                                                      );
+                                };
+                                
+                                die "Error running +VALUE on '$_[THEM]' field: '$_[FIELD]' (value: '$value'): $@" if $@;
+                            },
+                      
+                      DISABLED => [ '+DISABLED', '+VALUE' ],
+                      
+                      '+DISABLED' => sub { $_[FORM]->field( name  => $_[FIELD],
+                                                            disabled => 1,
+                                                            class    => 'Disabled',
+                                                            ) },
+                           
+                      READONLY => [ '+READONLY', '+VALUE' ],
+                                              
+                      '+READONLY' => sub { $_[FORM]->field( name     => $_[FIELD],
+                                                            readonly => 1,
+                                                            class    => 'ReadOnly',
+                                                            ) },
+                                                            
+                      FILE => [ '+FILE', '+VALUE' ],
+                      
+                      '+FILE' => sub 
                       { 
                           my $value = $_[THEM]->get( $_[FIELD] ) if ref( $_[THEM] );
                           
                           $_[FORM]->field( name  => $_[FIELD],
                                            type  => 'file',
-                                           value => $value,
                                            );
                       },
                       
                       # default in form_options
-                      OPTIONS_FROM_DB => sub 
+                      OPTIONS_FROM_DB => [ '+OPTIONS_FROM_DB', '+VALUE' ],
+                      
+                      '+OPTIONS_FROM_DB' => sub 
                       {    
                           my ( $series, $multiple ) = 
                               $_[ME]->_get_col_options_for_enumlike( $_[THEM], $_[FIELD] );
                         
                           return unless @$series;
                         
-                          my $value = $_[THEM]->get( $_[FIELD] ) if ref( $_[THEM] );
-                        
                           $_[FORM]->field( name      => $_[FIELD],
                                            options   => $series,
                                            multiple  => $multiple,
-                                           value     => $value,
                                            );
                       },
+                      
+                      '+REQUIRED' => sub { $_[FORM]->field( name      => $_[FIELD],
+                                                            required  => 1,
+                                                            ) },
                                                          
+                      '+NULL' => sub {},
+                      
+                      '+ADD_FIELD' => sub { $_[FORM]->field( name     => $_[FIELD],
+                                                             # need to set something to vivify the field
+                                                             required => 0, 
+                                                             ) },
+                                                          
                       };
                       
     __PACKAGE__->field_processors( $built_ins );    
@@ -313,6 +346,7 @@ sub _get_args
  
     $args{values} ||= \@values;
     
+    # XXX: deprecated
     my @reqd = map {''.$_} $proto->columns( 'Required' );
     
     if ( @reqd && ! $args{required} )
@@ -566,8 +600,8 @@ sub _related_class_and_rel_type
                                       ->{ $$mapping[0] }
                                       ->foreign_class;
     
-        my $accessor = $related_meta->accessor;   
-        my $map = $$mapping[0];                        
+        #my $accessor = $related_meta->accessor;   
+        #my $map = $$mapping[0];                        
     }
     else 
     {
@@ -841,6 +875,34 @@ sub form_pks
     }
 }
 
+=item form_timestamp
+
+Makes timestamp columns read only, since they will be set by the database.
+
+The default is to set the HTML C<disabled> attribute. This makes the field data un-selectable. 
+
+You may prefer to use the C<readonly> attribute instead, which allows the data to be selected 
+but not altered. Set a preprocessor for each C<timestamp> column in 
+C<< form_builder_defaults->{process_fields} >>, or in the arguments passed to C<as_form>..
+
+=cut
+
+sub form_timestamp
+{
+    my ( $me, $them, $form, $pre_process ) = @_;
+    
+    foreach my $field ( map {''.$_} $them->columns( 'All' ) )
+    {
+        next unless exists $form->field->{ $field };
+    
+        next unless $me->_get_type( $them, $field ) eq 'timestamp';
+    
+        my $process = $pre_process->{ $field } || 'DISABLED'; # 'READONLY'; # 
+        
+        $me->_process_field( $them, $form, $field, $process );
+    }
+}
+
     
 =item form_options
 
@@ -996,50 +1058,6 @@ sub form_has_a
         
     }
 }
-
-=begin notes
-
-package Class::DBI::FormBuilder::Plugin::Time::Piece;
-use strict;
-use warnings FATAL => 'all';
-
-#use Class::DBI::Plugin::Type; # not needed for mysql
-
-# takes a list of stuff, calls/returns $form->field(%args)
-#
-sub field 
-{
-    my ( $class, $them, $form, $field ) = @_;
-
-    my $type = $them->column_type( $field );
-
-    my $value = $them->$field.''; # lousy default
-    
-    my $validate = undef;
-    
-    if ( $type eq 'time' ) 
-    {
-        $value = $them->$field->hms;
-        
-        $validate = '/\d\d:\d\d:\d\d/';
-    } elsif ( $type eq 'date' ) 
-    {
-        $value = $them->$field->ymd;
-        
-        $validate = '/\d{4}-\d\d-\d\d/';
-    } else 
-    {
-        die "don't understand column type '$type'";
-    }
-    
-    $form->field( name      => $field,
-                  value     => $value,
-                  required  => 1,
-                  validate  => $validate,
-                  );
-}
-
-=end notes
 
 =item form_has_many 
 
@@ -1215,6 +1233,27 @@ sub _field_options
     return \@options;
 }
 
+=item form_process_extras
+
+This processor adds any fields in the C<process_fields> setup that do not exist. This is a useful method 
+for adding custom fields (i.e. fields that do not represent anything about the CDBI object) to a form. 
+
+=cut
+
+sub form_process_extras
+{
+    my ( $me, $them, $form, $pre_process ) = @_;
+    
+    foreach my $field ( keys %$pre_process )
+    {
+        next if exists $form->field->{ $field }; 
+        
+        my $process = $pre_process->{ $field };
+        
+        $me->_process_field( $them, $form, $field, $process );
+    }    
+}
+
 =back
 
 =head2 Plugins
@@ -1249,15 +1288,28 @@ This is a hashref, with keys being field names. Values can be:
 
 =item Name of a built-in
 
-    HIDDEN              make the field hidden
-    VALUE               display the current value (editable) 
-    DISABLE             display the current value (not editable)
-    FILE                build a file upload widget
-    OPTIONS_FROM_DB     check if the column is constrained to a few values
+    basic             shortcut
+    -------------------------------------------------------------------------------
+    +HIDDEN           HIDDEN            make the field hidden
+    +VALUE            VALUE             display the current value
+    +READONLY         READONLY          display the current value - not editable
+    +DISABLED         DISABLED          display the current value - not editable, not selectable, (not submitted?)
+    +FILE             FILE              build a file upload widget
+    +OPTIONS_FROM_DB  OPTIONS_FROM_DB   check if the column is constrained to a few values
+    +REQUIRED                           make the field required
+    +NULL                               no-op - useful for debugging
+    +SET_VALUE($value)                  set the value of the field to $value
+    +ADD_FIELD                          add a new field to the form (only necessary if the field is empty)
+    
+The 'basic' versions apply only their own modification. The 'shortcut' version also applies 
+the C<+VALUE> processor. 
     
 C<OPTIONS_FROM_DB> currently only supports MySQL ENUM or SET columns (the latter requires 
 a patch to L<Class::DBI::mysql>, see C<form_options> below). You probably won't need to use 
 this explicitly, as it's already used internally. 
+
+The C<+ADD_FIELD> processor is only necessary if you need to add a new field to a form, but don't want to 
+use any of the other processors on it. 
 
 =item Reference to a subroutine, or anonymous coderef
 
@@ -1272,8 +1324,7 @@ the coderef.
 
 =item Arrayref of the above
 
-Well, it was easy to implement, and maybe it will be useful to build multi-widget 'fields' like 
-date pickers or something. Applies each processor in order. 
+Applies each processor in order. 
 
 =back
 
@@ -1288,7 +1339,7 @@ This method is called on C<Class::DBI::FormBuilder> or a subclass.
 It installs a new field processor, which can then be referred to by name in C<process_fields>, 
 rather than by passing a coderef. This method could also be used to replace the supplied built-in 
 field processors. The new processor must either be a coderef, or the name of a package with a 
-suitable C<field> method.
+suitable C<field> method, or the name of another processor, or an arrayref of any of these.
 
 =back
 
@@ -1319,19 +1370,36 @@ sub _process_field
 {
     my ( $me, $them, $form, $field, $process ) = @_;
     
-    my @chain = ref( $process ) eq 'ARRAY' ? @$process : ( $process );
+    my @agenda = ( $process );
+    
+    # Expand each item on the agenda. Arrayrefs get listified and unshifted back 
+    # on to the start of the agenda. Coderefs on the agenda are returned. Non-code scalars are 
+    # looked up in the pre-processors dispatch table, or in another package, and 
+    # unshifted onto the start of the agenda, because they may be pointing to 
+    # further keys in the dispatch table. 
+    my $chain;
+    
+    $chain = sub
+    {
+        my $next = pop( @agenda );
+        
+        return unless $next;
+        
+        return $next if ref( $next ) eq 'CODE';
+        
+        unshift @agenda, ref $next eq 'ARRAY' ? @$next : $me->_track_down( $next );
+        
+        return $chain->();    
+    };
     
     # pass the form to each sub in the chain and tweak the specified field
-    foreach my $p ( @chain )
+    while ( my $p = $chain->() )
     {
-        my $processor = $me->_get_sub_for( $p );
-        
-        $processor->( $me, $them, $form, $field );
+        $p->( $me, $them, $form, $field );
     }
 }
 
-# translate a subref, built-in name, or package name, into a subref
-sub _get_sub_for
+sub _track_down
 {
     my ( $me, $processor ) = @_;
     
@@ -1339,17 +1407,29 @@ sub _get_sub_for
     
     my $p = $me->field_processors->{ $processor };
     
+    # might be a coderef, might be another key
     return $p if $p;
     
+    # +SET_VALUE() special case
+    if ( $processor =~ /^\+SET_VALUE\(\s*(.*)\s*\)$/ )
+    {
+        my $value = $1;
+        
+        $p = sub { $_[FORM]->field( name  => $_[FIELD],
+                                    value => $value,   
+                                    );
+                 };
+                 
+        return $p;
+    }                                                      
+                                                      
     # it's a field sub in another class
-    no strict 'refs';
-    $p = \&{"$processor\::field"};    
+    $processor->require or die "Couldn't load field processor package $processor: $@";
     
-    die "No sub for processor $processor" unless $p;
+    $p = $processor->can( 'field' ) || die "No field method in $processor";
     
     return $p;
 }
-# ----------------------------------------------------------------- [end] field processor architecture
 
 =head2 Form handling methods
 
@@ -2105,16 +2185,44 @@ and is probably incomplete. If you come across any failures, you can add suitabl
 
 =back
 
+$VAR1 = bless( {
+                 'foreign_class' => 'Referee',
+                 'name' => 'has_many',
+                 'args' => {
+                             'mapping' => [],
+                             'foreign_key' => 'consultant',
+                             'order_by' => undef
+                           },
+                 'class' => 'Consultant',
+                 'accessor' => 'referees'
+               }, 'Class::DBI::Relationship::HasMany' );
+
+
+
 =cut
 
 sub _get_type
 {
     my ( $me, $them, $col ) = @_;
     
-    my $type = $them->column_type( $col );
+    # $col might be a related (has_many or might_have) accessor - i.e. it refers to a column in 
+    # another table
     
-    die "No type detected for column $col in $them" unless $type;
+    my $type = $them->column_type( $col );
+     
+    unless ( $type )
+    {
+        my ( $other, $rel_type ) = $me->_related_class_and_rel_type( $them, $col );
         
+        my $meta = $them->meta_info( $rel_type, $col );
+        
+        my $fk = $meta->{args}->{foreign_key};
+        
+        $type = $other->column_type( $fk ) if $fk;            
+    
+        die "No type detected for column '$col' in '$them' or column '$fk' in '$other'" unless $type;
+    }
+    
     # $type may be something like varchar(255)
     
     $type =~ s/[^a-z]*$//;
@@ -2256,6 +2364,10 @@ Better merging of attributes. For instance, it'd be nice to set some field attri
 (e.g. size or type) in C<form_builder_defaults>, and not lose them when the fields list is 
 generated and added to C<%args>. 
 
+Regex and column type entries for C<process_fields>, analogous to validation settings.
+
+Use preprocessors in form_has_a, form_has_many and form_has_a
+
 Store CDBI errors somewhere on the form. For instance, if C<update_from_form> fails because 
 no object could be retrieved using the form data. 
 
@@ -2286,6 +2398,10 @@ C<_splice_form> needs to handle custom setup for more relationship types.
 David Baird, C<< <cpan@riverside-cms.co.uk> >>
 
 =head1 BUGS
+
+If no fields are explicitly required, then *all* fields will become required automatically, because 
+CGI::FormBuilder by default makes any field with validation become required, unless there is at least 
+1 field specified as required. 
 
 Please report any bugs or feature requests to
 C<bug-class-dbi-plugin-formbuilder@rt.cpan.org>, or through the web interface at
@@ -2428,4 +2544,16 @@ $VAR1 = {
         };
 
 
+A plain has_many (not part of a many_many) - a consultant has_many referees
+$VAR1 = bless( {
+                 'foreign_class' => 'Referee',
+                 'name' => 'has_many',
+                 'args' => {
+                             'mapping' => [],
+                             'foreign_key' => 'consultant',
+                             'order_by' => undef
+                           },
+                 'class' => 'Consultant',
+                 'accessor' => 'referees'
+               }, 'Class::DBI::Relationship::HasMany' );
 

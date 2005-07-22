@@ -1,5 +1,21 @@
 Revision history for Class-DBI-FormBuilder
 
+0.4   Fri 22 July 2005, 23:00
+        - added +READONLY processor - note this also sets the class of the input field to 'ReadOnly'
+        - added +DISABLED processor - note this also sets the class of the input field to 'Disabled'
+        - added +SET_VALUE($value) processor
+        - added +ADD_FIELD processor
+        - added +NULL processor
+        
+        - added 'timestamp' to @BASIC_FORM_MODIFIERS, and form_timestamp method 
+            which defaults to the DISABLED preprocessor
+        - added 'process_extras' to @BASIC_FORM_MODIFIERS, with form_process_extras method
+        
+        - fixed _get_type to detect column type for related fields
+        - much more sophisticated chaining of preprocessors
+        - the default is for fields not to be required (CGI::FB defaults to required, if a field has 
+            a validation spec, but in CDBI::FB, *all* fields have a validation spec)
+
 0.3511 Thur 21 Jul, 2005 09:00
         - added 'int' entry to ValidMap (reported by Dave Kamholz)
 
