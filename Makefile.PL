@@ -7,7 +7,6 @@ WriteMakefile
           'PREREQ_PM' => {
                            'CGI::FormBuilder' => '0',
                            'Class::DBI' => '0',
-                           'Class::DBI::Plugin::Type' => '0',
                            'Class::Data::Inheritable' => '0',
                            'List::Util' => '0',
                            'Test::Exception' => '0',

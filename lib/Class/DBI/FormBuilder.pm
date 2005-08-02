@@ -18,14 +18,18 @@ use base 'Class::Data::Inheritable';
 # but I need to track down which. UPDATE: the dev version now uses map { $_->name }
 # everywhere.
 
-our $VERSION = '0.4';
+our $VERSION = '0.41';
 
 # process_extras *must* come last
-our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp process_extras );
+our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras );
 
 # have a look at http://search.cpan.org/~rsavage/DBIx-Admin-TableInfo-1.02/ instead
 our %ValidMap = ( varchar   => 'VALUE',
-                  char      => 'VALUE', # includes MySQL enum and set
+                  char      => 'VALUE', # includes MySQL enum and set - UPDATE - not since 0.41
+                  
+                  enum      => 'VALUE',
+                  set       => 'VALUE',
+                  
                   blob      => 'VALUE', # includes MySQL text
                   text      => 'VALUE',
                   
@@ -64,7 +68,7 @@ __PACKAGE__->mk_classdata( field_processors => {} );
                                 eval {
                                      $value = $_[THEM]->get( $_[FIELD] ) if ref( $_[THEM] );
                                      
-                                     $value &&= ''.$value;  # CGI::FB chokes on objects
+                                     $value = ''.$value if defined( $value );  # CGI::FB chokes on objects
                                      
                                      $_[FORM]->field( name  => $_[FIELD],
                                                       value => $value,   
@@ -73,6 +77,8 @@ __PACKAGE__->mk_classdata( field_processors => {} );
                                 
                                 die "Error running +VALUE on '$_[THEM]' field: '$_[FIELD]' (value: '$value'): $@" if $@;
                             },
+                            
+                      TIMESTAMP => 'DISABLED',
                       
                       DISABLED => [ '+DISABLED', '+VALUE' ],
                       
@@ -190,9 +196,6 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     use base 'Class::DBI';
     use Class::DBI::FormBuilder;
     
-    # for automatic validation setup
-    use Class::DBI::Plugin::Type;
-    
     # POST all forms to server
     Film->form_builder_defaults->{method} = 'post';
     
@@ -206,7 +209,7 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     # file upload fields, so need to tell it:
     Film->form_builder_defaults->{process_fields}->{trailer} = 'FILE';
     
-    # These fields must always be submitted for create/update routines
+    # has_a fields will be automatically set to 'required'. Additional fields can be specified:
     Film->form_builder_defaults->{required} = qw( foo bar );
     
     
@@ -257,31 +260,431 @@ from an object, it populates the form fields with the object's values.
 Column metadata and CDBI relationships are analyzed and the fields of the form are modified accordingly. 
 For instance, MySQL C<enum> and C<set> columns are configured as C<select>, C<radiobutton> or 
 C<checkbox> widgets as appropriate, and appropriate widgets are built for C<has_a>, C<has_many> 
-and C<might_have> relationships. Further relationships can be added by subclassing.
+and C<might_have> relationships. Further relationships can be added by subclassing. C<has_a> columns 
+are set as 'required' fields in create/update forms.
 
 A demonstration app (using L<Maypole::FormBuilder|Maypole::FormBuilder>) can be viewed at 
 
     http://beerfb.riverside-cms.co.uk
     
-=head1 GOTCHAS
+=head1 Customising field construction
+
+Often, the default behaviour will be unsuitable. For instance, a C<has_a> relationship might point to 
+a related table with thousands of records. A popup widget with all these records is probably not useful.  
+Also, it will take a long time to build, so post-processing the form to re-design the field is a 
+poor solution. 
+
+Instead, you can pass an extra C<process_fields> argument in the call to C<as_form> (or you can 
+set it in C<form_builder_defaults>).
+
+Many of the internal routines use this mechanism for configuring fields. A manually set '+' 
+(basic) processor will be B<added> to any other automatic processing, whereas a manually set shortcut 
+processor (no '+') will B<replace> all automatic processing. 
+
+=head2 process_fields
+
+This is a hashref, with keys being field names. Values can be:
 
 =over 4
 
-=item Class::DBI::Plugin::Type
+=item Name of a built-in
 
-In almost all cases, you should load L<Class::DBI::Plugin::Type> in your CDBI classes. This is used 
-in the automatic validation setup. If you fail to load it, you will probably get an error similar to 
+    basic             shortcut
+    -------------------------------------------------------------------------------
+    +HIDDEN           HIDDEN            make the field hidden
+    +VALUE            VALUE             display the current value
+    +READONLY         READONLY          display the current value - not editable
+    +DISABLED         DISABLED          display the current value - not editable, not selectable, (not submitted?)
+    +FILE             FILE              build a file upload widget
+    +OPTIONS_FROM_DB  OPTIONS_FROM_DB   check if the column is constrained to a few values
+    +REQUIRED                           make the field required
+    +NULL                               no-op - useful for debugging
+    +ADD_FIELD                          add a new field to the form (only necessary if the field is empty)
+                      TIMESTAMP         used to process TIMESTAMP fields, defaults to DISABLED, but you can 
+                                            easily replace it with a different behaviour
+    +SET_VALUE($value)                  set the value of the field to $value - DEPRECATED - use +SET_value
+    +SET_$foo($value) SET_$foo($value)  set the $foo attribute of the field to $value 
+    
+The 'basic' versions apply only their own modification. The 'shortcut' version also applies 
+the C<+VALUE> processor. 
+    
+C<OPTIONS_FROM_DB> currently only supports MySQL ENUM or SET columns. You probably won't need to use 
+this explicitly, as it's already used internally. 
 
-    Use of 'column_type' is deprecated at <...>/5.8.6/Class/DBI/FormBuilder.pm line 1851. 
-    Use 'has_a' instead.
-    My::CDBI::Class col_name needs an associated class at <...>/5.8.6/Class/DBI/Relationship/HasA.pm line 14 
+The C<+ADD_FIELD> processor is only necessary if you need to add a new field to a form, but don't want to 
+use any of the other processors on it. 
+
+=item Reference to a subroutine, or anonymous coderef
+
+The coderef will be passed the L<Class::DBI::FormBuilder> class or subclass, the CDBI class or 
+object, the L<CGI::FormBuilder> form object, and the field name as arguments, and should build the 
+named field. 
+
+=item Package name 
+
+Name of a package with a suitable C<field> subroutine. Gets called with the same arguments as 
+the coderef.
+
+=item Arrayref of the above
+
+Applies each processor in order. 
+
+=back
+
+=head1 Plugins
+
+C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
+load (via C<require>) an appropriate plugin. For instance, for a C<Time::Piece> column, it will attempt 
+to load C<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, passing 
+the CDBI class for whom the form has been constructed, the form, and the name of the field being processed. 
+The plugin can use this information to modify the form, perhaps adding extra fields, or controlling 
+stringification, or setting up custom validation. 
+
+If no plugin is found, a fatal exception is thrown. If you have a situation where it would be useful to 
+simply stringify the object instead, let me know and I'll make this configurable.
+
+=head1 Automatic validation setup
+
+If you place a normal L<CGI::FormBuilder|CGI::FormBuilder> validation spec in 
+C<< $class->form_builder_defaults->{validate} >>, that spec will be used to configure validation. 
+
+If there is no spec in C<< $class->form_builder_defaults->{validate} >>, then validation will 
+be configured automatically. The default configuration is pretty basic, but you can modify it 
+by placing settings in C<< $class->form_builder_defaults->{auto_validate} >>. 
+
+=head2 Basic auto-validation
+
+Given no validation options for a column in the C<auto_validate> slot, the settings for most columns 
+will be taken from C<%Class::DBI::FormBuilder::ValidMap>. This maps SQL column types to the L<CGI::FormBuilder|CGI::FormBuilder> validation settings C<VALUE>, C<INT>, or C<NUM>. 
+
+MySQL C<ENUM> or C<SET> columns will be set up to validate that the submitted value(s) match the allowed 
+values. 
+
+Any column listed in C<< $class->form_builder_defaults->{options} >> will be set to validate those values. 
+
+=head2 Advanced auto-validation
+
+The following settings can be placed in C<< $class->form_builder_defaults->{auto_validate} >>.
+
+=over 4
+
+=item validate
+
+Specify validate types for specific columns:
+
+    validate => { username   => [qw(nate jim bob)],
+                  first_name => '/^\w+$/',    # note the 
+                  last_name  => '/^\w+$/',    # single quotes!
+                  email      => 'EMAIL',
+                  password   => \&check_password,
+                  confirm_password => {
+                      javascript => '== form.password.value',
+                      perl       => 'eq $form->field("password")'
+                  }
+                          
+This option takes the same settings as the C<validate> option to C<CGI::FormBuilder::new()> 
+(i.e. the same as would otherwise go in C<< $class->form_builder_defaults->{validate} >>). 
+Settings here override any others. 
+
+=item skip_columns
+
+List of columns that will not be validated:
+
+    skip_columns => [ qw( secret_stuff internal_data ) ]
+
+=item match_columns
+
+Use regular expressions matching groups of columns to specify validation:
+
+    match_columns => { qr/(^(widget|burger)_size$/ => [ qw( small medium large ) ],
+                       qr/^count_.+$/             => 'INT',
+                       }
+                       
+=item validate_types
+
+Validate according to SQL data types:
+
+    validate_types => { date => \&my_date_checker,
+                       }
+                       
+Defaults are taken from the package global C<%TypesMap>. 
+                        
+=item match_types
+
+Use a regular expression to map SQL data types to validation types:
+
+    match_types => { qr(date) => \&my_date_checker,
+                     }
+                     
+=item debug
+    
+Control how much detail to report (via C<warn>) during setup. Set to 1 for brief 
+info, and 2 for a list of each column's validation setting.
+
+=item strict
+
+If set to 1, will die if a validation setting cannot be determined for any column. 
+Default is to issue warnings and not validate these column(s).
+
+=back
+    
+=head2 Validating relationships
+
+Although it would be possible to retrieve the IDs of all objects for a related column and use these to 
+set up validation, this would rapidly become unwieldy for larger tables. Default validation will probably be 
+acceptable in most cases, as the column type will usually be some kind of integer. 
+
+=over 4
+
+=item timestamp
+
+The default behaviour is to skip validating C<timestamp> columns. A warning will be issued
+if the C<debug> parameter is set to 2.
+
+=item Failures
+
+The default mapping of column types to validation types is set in C<%Class::DBI::FormBulder::ValidMap>, 
+and is probably incomplete. If you come across any failures, you can add suitable entries to the hash before calling C<as_form>. However, B<please> email me with any failures so the hash can be updated for everyone.
+
+=back
+
+=cut
+
+=head1 Gotchas
+
+=over 4
+
+=item Class::DBI::FromForm
+
+If you want to use this module alongside L<Class::DBI::FromForm|Class::DBI::FromForm>, 
+load the module like so
+
+    use Class::DBI::FormBuilder BePoliteToFromForm => 1;
+    
+and C<create_from_form> and C<update_from_form> will instead be imported as C<create_from_fb> and C<update_from_fb>.
+
+You might want to do this if you have more complex validation requirements than L<CGI::FormBuilder|CGI::FormBuilder> provides. 
     
 =back
 
 =head1 METHODS
 
 Almost all the methods described here are exported into the caller's namespace, except for the form modifiers 
-(see below). 
+(see below), and C<new_field_processor>. 
+
+=over 4
+
+=item new_field_processor( $processor_name, $coderef or package name )
+
+This method is called on C<Class::DBI::FormBuilder> or a subclass, rather than on a L<Class::DBI> 
+object or subclass. 
+
+It installs a new field processor, which can then be referred to by name in C<process_fields>, 
+rather than by passing a coderef. This method could also be used to replace the supplied built-in 
+field processors, for example to alter the default C<TIMESTAMP> behaviour (see C<form_timestamp>). 
+The new processor must either be a coderef, or the name of a package with a 
+suitable C<field> method, or the name of another processor, or an arrayref of any of these.
+
+=cut   
+    
+# ----------------------------------------------------------------- field processor architecture -----
+
+# install a new default processor that can be referred to by name
+sub new_field_processor
+{
+    my ( $me, $p_name, $p ) = @_;
+    
+    my $coderef = $p if ref( $p ) eq 'CODE';
+    
+    unless ( $coderef )
+    {
+        $p->require || die "Error loading custom field processor package $p: $@";
+        
+        UNIVERSAL::can( $p, 'field' ) or die "$p does not have a field() subroutine";
+        
+        no strict 'refs';
+        $coderef = \&{"$p\::field"};    
+    }
+    
+    $me->field_processors->{ $p_name } = $coderef;    
+}
+
+# use a chain of processors to construct a field
+sub _process_field
+{
+    my ( $me, $them, $form, $field, $process ) = @_;
+    
+    my $chain = $me->_build_processor_chain( $process );
+    
+    # pass the form to each sub in the chain and tweak the specified field
+    while ( my $p = $chain->() )
+    {
+        $p->( $me, $them, $form, $field );
+    }
+}
+
+# returns an iterator
+sub _build_processor_chain
+{
+    my ( $me, $process ) = @_;
+    
+    my @agenda = ( $process );
+    
+    # Expand each item on the agenda. Arrayrefs get listified and unshifted back 
+    # on to the start of the agenda. Coderefs on the agenda are returned. Non-code scalars are 
+    # looked up in the pre-processors dispatch table, or in another package, and 
+    # unshifted onto the start of the agenda, because they may be pointing to 
+    # further keys in the dispatch table. 
+    my $chain;
+    
+    $chain = sub
+    {
+        my $next = pop( @agenda );
+        
+        return unless $next;
+        
+        return $next if ref( $next ) eq 'CODE';
+        
+        unshift @agenda, ref $next eq 'ARRAY' ? @$next : $me->_track_down( $next );
+        
+        return $chain->();    
+    };
+    
+    return $chain;
+}
+
+sub _track_down
+{
+    my ( $me, $processor ) = @_;
+    
+    return $processor if ref( $processor ) eq 'CODE';
+    
+    my $p = $me->field_processors->{ $processor };
+    
+    # might be a coderef, might be another key
+    return $p if $p;
+    
+    # +SET_VALUE() special case - DEPRECATED in 0.41
+    if ( $processor =~ /^\+SET_VALUE\(\s*(.*)\s*\)$/ )
+    {
+        my $value = $1;
+        
+        warn '+SET_VALUE($value) is deprecated - use +SET_value($value) instead';
+        
+        $p = sub { $_[FORM]->field( name  => $_[FIELD],
+                                    value => $value,   
+                                    );
+                 };
+                 
+        return $p;
+    }          
+    
+    # +SET_$foo($bar) general special case
+    if ( $processor =~ /^(?:\+?)SET_(\w+)\(\s*(.*)\s*\)$/ )
+    {
+        my $attribute = $1;
+        my $value     = $2;
+        
+        $p = sub { $_[FORM]->field( name       => $_[FIELD],
+                                    $attribute => $value,
+                                    );
+                   };
+         
+        return $p;
+    }        
+    
+    die "Unexpected ref: $processor (expected class name)" if ref $processor;
+    
+    # it's a field sub in another class
+    $processor->require or die "Couldn't load field processor package $processor: $@";
+    
+    $p = $processor->can( 'field' ) || die "No field method in $processor";
+    
+    return $p;
+}
+
+# Combines automatic and custom processors. Accepts 2 sets of processors. The second (the custom 
+# processors set for the field, if any) is 
+# traversed until a 'stop' processor is found (a named processor without a leading '+'). 
+# If found, returns the second (custom) set only. If no 'stop' processor is found, appends the 
+# second set to the first set. 
+sub _add_processors
+{
+    my ( $me, $auto, $custom ) = @_;
+    
+    #warn sprintf "Combining procs %s and %s\n", $auto || '', $custom || '';
+    
+    return $custom unless $auto;
+    return $auto   unless $custom;
+    
+    my $chain = $me->_build_named_processor_chain( $custom );
+    
+    while ( my $name = $chain->() )
+    {
+        warn "Checking custom processor $name for stop";
+        warn "Dropping automatic processors - found custom stop processor $name" if $name !~ /^\+/;
+        return $custom if $name !~ /^\+/;
+    }
+    
+    return [ $auto, $custom ];
+}
+
+# only use this to look at the names, not to do any processing, because it throws away 
+# any processors that are not named
+sub _build_named_processor_chain
+{
+    my ( $me, $process ) = @_;
+    
+    my @agenda = ( $process );
+    
+    # Expand each item on the agenda. Arrayrefs get listified and unshifted back 
+    # on to the start of the agenda. Coderefs on the agenda are returned. Non-code scalars are 
+    # looked up in the pre-processors dispatch table, or in another package, and 
+    # unshifted onto the start of the agenda, because they may be pointing to 
+    # further keys in the dispatch table. 
+    my $chain;
+    
+    $chain = sub
+    {
+        my $next = pop( @agenda );
+        
+        return unless $next;
+        
+        # if it's a coderef, drop it and move on to next item
+        return $chain->() if ref( $next ) eq 'CODE'; 
+        
+        # if it's an arrayref, expand it onto the start of the agenda and move on 
+        # to next item (i.e. first item in the arrayref)
+        if ( ref( $next ) eq 'ARRAY' )
+        {
+            unshift @agenda, @$next;
+            return $chain->();
+        }
+        
+        die "Unexpected ref for processor: $next" if ref $next;
+        
+        # It's a string
+        # if it's in the processors hash, then
+        #   - check if it returns a coderef or an arrayref or a string when looked up
+        #       - if a coderef, return the string
+        #       - unshift anything else onto the agenda
+        if ( my $foo = $me->field_processors->{ $next } )
+        {
+            return $next if ref $foo eq 'CODE';
+            
+            # it's a string or an arrayref
+            unshift @agenda, $foo;
+        }
+        
+        return $chain->();
+    };
+    
+    return $chain;
+}
+
+# ----------------------------------------------------------------- / field processor architecture -----
+
+=back
 
 =head2 Form generating methods
 
@@ -304,54 +707,236 @@ Note that parameter merging is likely to become more sophisticated in future rel
 (probably copying the argument merging code from L<CGI::FormBuilder|CGI::FormBuilder> 
 itself).
 
+=item search_form( %args )
+
+Build a form with inputs that can be fed to search methods (e.g. C<search_where_from_form>). 
+For instance, all selects are multiple, fields that normally would be required 
+are not, and C<TEXT> columns are represented as C<text> fields rather than as C<textarea>s by default.
+
+B<Automatic configuration of validation settings is not carried out on search forms>. You can 
+still configure validation settings using the standard L<CGI::FormBuilder> settings. 
+
+In many cases, you will want to design your own search form, perhaps only searching 
+on a subset of the available columns. Note that you can acheive that by specifying 
+
+    fields => [ qw( only these fields ) ]
+    
+in the args. 
+
+The following search options are available. They are only relevant if processing 
+via C<search_where_from_form>.
+
+=over 4
+
+=item search_opt_cmp
+
+Allow the user to select a comparison operator by passing an arrayref:
+
+    search_opt_cmp => [ ( '=', '!=', '<', '<=', '>', '>=', 
+                          'LIKE', 'NOT LIKE', 'REGEXP', 'NOT REGEXP',
+                          'REGEXP BINARY', 'NOT REGEXP BINARY',
+                          ) ]
+    
+
+Or, transparently set the search operator in a hidden field:
+
+    search_opt_cmp => 'LIKE'
+    
+=item search_opt_order_by
+
+If true, will generate a widget to select (possibly multiple) columns to order the results by, 
+with an C<ASC> and C<DESC> option for each column.
+
+If set to an arrayref, will use that to build the widget. 
+
+    # order by any columns
+    search_opt_order_by => 1
+    
+    # or just offer a few
+    search_opt_order_by => [ 'foo', 'foo DESC', 'bar' ]
+    
+=back
+
 =cut
 
 sub as_form
 {
-    my ( $proto, %args_in ) = @_;
+    my ( $them, %args_in ) = @_;
     
-    my $cdbifb = $proto->__form_builder_subclass__;
+    my $me = $them->__form_builder_subclass__;
     
-    my ( $orig, %args ) = $cdbifb->_get_args( $proto, %args_in );
+    return scalar $me->_as_form( $them, %args_in );    
     
-    $cdbifb->_setup_auto_validation( $proto, \%args );
+#    my ( $orig, %args ) = $me->_get_args( $them, %args_in );
     
-    return $cdbifb->_make_form( $proto, $orig, %args );
+#    $me->_setup_auto_validation( $them, \%args );
+    
+#    return $me->_make_form( $them, $orig, %args );
 }
 
+sub _as_form
+{
+    my ( $me, $them, %args_in ) = @_;
+    
+    # search_form does not validate input
+    my $skip_validation = delete $args_in{__SKIP_VALIDATION__};
+    
+    my ( $orig, %args ) = $me->_get_args( $them, %args_in );
+    
+    $me->_setup_auto_validation( $them, \%args ) unless $skip_validation;
+    
+    my $form = $me->_make_form( $them, $orig, %args );
+    
+    return wantarray ? ( $form, %args ) : $form;
+}
+
+sub search_form
+{
+    my ( $them, %args_in ) = @_;
+    
+    my $me = $them->__form_builder_subclass__;
+    
+    my $cdbi_class = ref( $them ) || $them;
+    
+    $args_in{__SKIP_VALIDATION__}++;
+    
+    my ( $form, %args ) = $me->_as_form( $cdbi_class, %args_in );
+    
+    # make all selects multiple, no fields required unless explicitly set, 
+    # and change textareas back into text inputs
+    
+    my %force_required = map { $_ => 1 } @{ $args{required} || [] };
+    
+    foreach my $field ( $form->field )
+    {
+        next unless exists $form->field->{ $field }; 
+        
+        # skip search controls - a bit ugly
+        next if $field =~ /^(?:search_opt_order_by|search_opt_cmp)$/;
+        
+        $field->multiple( 1 ) if $field->options;
+                      
+        $field->required( 0 ) unless $force_required{ $field };
+        
+        $field->type( 'text' ) if $field->type eq 'textarea';
+    }   
+    
+    # ----- customise the search -----
+    # For processing a submitted form, remember that the field _must_ be added to the form 
+    # so that its submitted value can be extracted in search_where_from_form()
+    
+    # ----- order_by
+    # this must come before adding any other fields, because the list of columns 
+    # is taken from the form (not the CDBI class/object) so we match whatever 
+    # column selection happened during form construction
+    my %order_by_spec = ( # name     => 'search_opt_order_by',
+                          multiple => 1,
+                          );
+    
+    if ( my $order_by = delete $args{search_opt_order_by} )
+    {
+        $order_by = [ map  { ''.$_, "$_ DESC" } 
+                      grep { $_->type ne 'hidden' } 
+                      $form->field 
+                      ] 
+                      unless ref( $order_by );
+        
+        $order_by_spec{options} = $order_by;
+    }
+    
+    # ----- comparison operator    
+    my $cmp = delete( $args{search_opt_cmp} ) || '=';
+    
+    my %cmp_spec; # = ( name => 'search_opt_cmp' );
+    
+    if ( ref( $cmp ) )
+    {
+        $cmp_spec{options}  = $cmp;
+        $cmp_spec{value}    = $cmp->[0];
+        #$cmp_spec{multiple} = 0;
+    }
+    else
+    {
+        $cmp_spec{value} = $cmp;
+        $cmp_spec{type}  = 'hidden';
+    }
+    
+    # this is annoying...
+    my %fields = map { ''.$_ => $_ } $form->field;
+    
+    # if the caller has passed in some custom settings, they will have caused the field to be 
+    # auto-vivified
+    if ( my $cmp_field = $fields{search_opt_cmp} )
+    {
+        # this (used to?) causes a warning when setting the value, which may mean the value has already been set before
+        $cmp_field->$_( $cmp_spec{ $_ } ) for keys %cmp_spec;    
+    }
+    else
+    # otherwise, we need to auto-vivify it now
+    {
+        $form->field( name => 'search_opt_cmp', %cmp_spec );    
+    }
+    
+    if ( my $order_by_field = $fields{search_opt_order_by} )
+    {
+        $order_by_field->$_( $order_by_spec{ $_ } ) for keys %order_by_spec;   
+    }
+    else
+    {
+        $form->field( name => 'search_opt_order_by', %order_by_spec );    
+    }
+    
+    # ...why did this stop working? - I think because sometimes the fields are auto-vivified before getting 
+    # to this point, and that seems to be problem when setting the value
+    #$form->field( %cmp_spec );    
+    #$form->field( %order_by_spec );    
+    
+    return $form;
+}
+
+# need to do much better argument merging
 sub _get_args
 {
-    my ( $me, $proto, %args_in ) = @_;
+    my ( $me, $them, %args_in ) = @_;
     
-    my %args = ( %{ $proto->form_builder_defaults }, %args_in );
+    @{ $args_in{fields} } = map { ''.$_ } @{ $args_in{fields} } if $args_in{fields};
+    
+    # NOTE: this still means any custom processors for a given field, will replace all default 
+    #           processors for that field, but at least we can mix some fileds having default 
+    #           processors, and others having custom ones.
+    my $pre_process1 = $them->form_builder_defaults->{process_fields} || {};
+    my $pre_process2 = delete( $args_in{process_fields} ) || {};
+    my %pre_process  = ( %$pre_process1, %$pre_process2 );
+    
+    my %args = ( %{ $them->form_builder_defaults }, %args_in );
+    
+    $args{process_fields} = \%pre_process;
     
     # take a copy, and make sure not to transform undef into []
     my $original_fields = $args{fields} ? [ @{ $args{fields} } ] : undef;
     
-    my %pk = map { ''.$_ => 1 } $proto->primary_columns;
+    my %pk = map { ''.$_ => 1 } $them->primary_columns;
     
     $args{fields} ||= [ map  {''.$_} 
                         grep { ! $pk{ ''.$_ } }    
                         #$proto->columns( 'All' ) 
-                        $me->_db_order_columns( $proto, 'All' )
+                        $me->_db_order_columns( $them, 'All' )
                         ];
-    
+                        
     push( @{ $args{keepextras} }, keys %pk ) unless ( $args{keepextras} && $args{keepextras} == 1 );
     
     # for objects, populate with data
-    # nb. don't say $proto->get( $_ ) because $_ may be an accessor installed by a relationship 
-    # (e.g. has_many) - get() only works with real columns.
-    my @values = eval { map { '' . $proto->$_ } @{ $args{fields} } } if ref $proto;
-    die "Error populating values for $proto from '@{ $args{fields} }': $@" if $@;
- 
-    $args{values} ||= \@values;
-    
-    # XXX: deprecated
-    my @reqd = map {''.$_} $proto->columns( 'Required' );
-    
-    if ( @reqd && ! $args{required} )
+    if ( ref $them )
     {
-        $args{required} = \@reqd;
+        # nb. can't simply say $proto->get( $_ ) because $_ may be an accessor installed by a relationship 
+        # (e.g. has_many) - get() only works with real columns. 
+        my @values = eval { map { my $v = $them->$_; defined $v ? ''.$v : undef } # column might be NULL, 
+                            @{ $args{fields} }                                    # or return an object
+                            };
+        
+        die "Error populating values for $them from '@{ $args{fields} }': $@" if $@;
+    
+        $args{values} ||= \@values;
     }
     
     # take care that anything in here is copied, not a reference
@@ -359,32 +944,6 @@ sub _get_args
     
     return $orig, %args;
 }
-
-# Get deep into CDBI to extract the columns in the same order as defined in the database.
-# In fact, this returns the columns in the order they were originally supplied to 
-# $proto->columns( All => [ col list ] ). Defaults 
-# to the order returned from the database query in CDBI::Loader, which for MySQL, 
-# is the same as the order in the database.
-sub _db_order_columns 
-{
-    my ( $me, $them, $group ) = @_;
-    
-    $group ||= 'All';
-
-    # dkamholz spotted this bug:    
-    # If asked for group 'All', and All was not set up explicitly, the __grouper etc lookup dies with 
-    # Can't use an undefined value as an ARRAY reference at <...>/5.8.6/Class/DBI/FormBuilder.pm line xxx.
-    # Maypole *may* be setting up the All group explicitly (via CDBI::Loader?), but generally 
-    # the 'All' group will be implicitly defined by CDBI for 'hand-built' classes. 
-    
-    # And in those cases, $them->columns( 'All' ) is turning up empty in tests (98.misc.t), so it's still 
-    # not properly fixed. So we could just say 
-    # return @{ $them->__grouper->{_groups}->{ $group } || [] }
-    # and get the same effect. 
-    
-    return exists $them->__grouper->{_groups}->{ $group } ? @{ $them->__grouper->{_groups}->{ $group } } : 
-                                                            $them->columns( $group ); 
-} 
 
 sub _make_form
 {
@@ -406,6 +965,172 @@ sub _make_form
     
     return $form;
 }
+
+# ----------------------------------------------------------------------- column meta data -----
+# this is used to: fix _db_order_columns, remove requirement for CDBI::P::Type, 
+#                   remove requirement for patch to CDBI::mysql for SET columns
+# it could also:   provide extra hints for column size, 
+sub _load_meta
+{
+    my ( $me, $them ) = @_;
+    
+    my $class = ref( $them ) || $them;
+    
+    $class->mk_classdata( '__fb_meta' );
+    
+    my $dbh   = $them->db_Main;
+    my $table = $them->table;
+    my $meta  = {};
+    
+    # undef does not constrain the data returned for that key
+    # I'm suspicious that setting catalog and schema to undef might break RDBMSs that actually 
+    # do supply that information. 
+    
+    #                                catalog schema table   column
+    if ( my $sth = $dbh->column_info( undef, undef, $table, '%' ) )
+    {
+        $dbh->errstr  && die "Error getting column info sth: " . $dbh->errstr;
+        $sth->execute or die "Error executing column info: "   . $sth->errstr;
+        
+        my $column_info = $sth->fetchall_hashref( [ qw( TABLE_CAT TABLE_SCHEM TABLE_NAME COLUMN_NAME ) ] )
+                                ->{''}->{''}->{ $table };
+                                
+        foreach my $col ( keys %$column_info )
+        {
+            $meta->{ $col } = { map { $_ => $column_info->{ $col }->{ $_ } } 
+                                    qw( COLUMN_DEF         COLUMN_SIZE     DECIMAL_DIGITS 
+                                        NULLABLE           IS_NULLABLE  
+                                        ORDINAL_POSITION   TYPE_NAME
+                                        mysql_values       mysql_type_name )
+                                 };
+        }
+    }
+    else
+    {
+        # typeless db e.g. sqlite
+        
+        $class->set_sql(fbdummy => 'SELECT * FROM __TABLE__ WHERE 1=0' );
+    
+        my $sth = $class->sql_fbdummy;
+        
+        $sth->execute;
+        
+        # see 'Statement Handle Attributes' in the DBI docs for a list of available attributes
+        my $cols  = $sth->{NAME};
+        my $types = $sth->{TYPE};
+        # my $sizes = $sth->{PRECISION};    empty
+        # my $nulls = $sth->{NULLABLE};     empty
+        
+        my $order = 0;
+        
+        foreach my $col ( @$cols )
+        {
+            $meta->{ $col }->{NULLABLE}         = 1;
+            $meta->{ $col }->{IS_NULLABLE}      = 'yes';
+            $meta->{ $col }->{ORDINAL_POSITION} = $order++;
+            $meta->{ $col }->{TYPE_NAME}        = shift( @$types ); # varchar or varchar(xxx) is OK
+        }
+    }
+        
+    $them->__fb_meta( $meta );
+}
+
+{
+    my %MetaMap = reverse ( COLUMN_DEF        => 'default',
+                            COLUMN_SIZE       => 'size',
+                            DECIMAL_DIGITS    => 'digits',
+                            NULLABLE          => 'nullable',    # 0 => no, 1 => yes, 2 => unknown
+                            IS_NULLABLE       => 'is_nullable', # no, yes, ''
+                            ORDINAL_POSITION  => 'order',
+                            TYPE_NAME         => 'type',
+                            # mysql_values      => '',
+                            # mysql_type_name   => '',
+                            );
+                    
+    sub _get_meta
+    {
+        my ( $me, $them, $column, $key ) = @_;
+        
+        $me->_load_meta( $them ) unless $them->can( '__fb_meta' );
+        
+        my $k = $MetaMap{ $key } || $key;
+        
+        return $them->__fb_meta->{ $column }->{ $k } unless ref( $column ) eq 'ARRAY';
+        
+        return map { $them->__fb_meta->{ $_ }->{ $k } } @$column;
+    }
+}
+
+=begin notes
+
+$VAR1 = { catalogue schema   table            column           meta
+          '' => {
+                  '' => {
+                          'consultant' => {
+                                            '_telephone' => {
+                                                              'COLUMN_DEF' => '',
+                                                              'mysql_values' => undef,
+                                                              'NUM_PREC_RADIX' => undef,
+                                                              'COLLATION_CAT' => undef,
+                                                              'TABLE_SCHEM' => undef,
+                                                              'DOMAIN_NAME' => undef,
+                                                              'COLLATION_NAME' => undef,
+                                                              'REMARKS' => undef,
+                                                              'mysql_type_name' => 'varchar(64)',
+                                                              'COLUMN_SIZE' => '64',
+                                                              'SCOPE_NAME' => undef,
+                                                              'TYPE_NAME' => 'VARCHAR',
+                                                              'UDT_NAME' => undef,
+                                                              'NULLABLE' => 0,
+                                                              'DATA_TYPE' => 12,
+                                                              'TABLE_NAME' => 'consultant',
+                                                              'DOMAIN_SCHEM' => undef,
+                                                              'CHAR_SET_CAT' => undef,
+                                                              'COLLATION_SCHEM' => undef,
+                                                              'CHAR_SET_NAME' => undef,
+                                                              'DECIMAL_DIGITS' => undef,
+                                                              'UDT_CAT' => undef,
+                                                              'SCOPE_CAT' => undef,
+                                                              'TABLE_CAT' => undef,
+                                                              'CHAR_OCTET_LENGTH' => undef,
+                                                              'BUFFER_LENGTH' => undef,
+                                                              'IS_NULLABLE' => 'NO',
+                                                              'MAX_CARDINALITY' => undef,
+                                                              'ORDINAL_POSITION' => 18,
+                                                              'UDT_SCHEM' => undef,
+                                                              'COLUMN_NAME' => '_telephone',
+                                                              'DTD_IDENTIFIER' => undef,
+                                                              'mysql_is_pri_key' => '',
+                                                              'SQL_DATA_TYPE' => 12,
+                                                              'CHAR_SET_SCHEM' => undef,
+                                                              'IS_SELF_REF' => undef,
+                                                              'DOMAIN_CAT' => undef,
+                                                              'SCOPE_SCHEM' => undef,
+                                                              'SQL_DATETIME_SUB' => undef
+                                                            },
+                                                            
+=end notes
+
+=cut
+
+# ----------------------------------------------------------------------- / column meta data -----
+
+sub _db_order_columns 
+{
+    my ( $me, $them, $group ) = @_;
+    
+    $group ||= 'All';
+
+    my @columns = $them->columns( $group );
+    
+    my @orders  = $me->_get_meta( $them, \@columns, 'order' );
+    
+    my %c_o = map { $_ => shift( @columns ) } @orders;
+    
+    my @ordered = map { $c_o{ $_ } } sort keys %c_o;
+    
+    return @ordered;
+} 
 
 =item as_form_with_related
 
@@ -713,124 +1438,6 @@ sub _retrieve_entity_from_fake_fname
 
 # ------------------------------------------------------- end encode / decode field names -----
 
-=item search_form( %args )
-
-Build a form with inputs that can be fed to search methods (e.g. C<search_where_from_form>). 
-For instance, all selects are multiple, and fields that normally would be required 
-are not. 
-
-In many cases, you will want to design your own search form, perhaps only searching 
-on a subset of the available columns. Note that you can acheive that by specifying 
-
-    fields => [ qw( only these fields ) ]
-    
-in the args. 
-
-The following search options are available. They are only relevant if processing 
-via C<search_where_from_form>.
-
-=over 4
-
-=item search_opt_cmp
-
-Allow the user to select a comparison operator by passing an arrayref:
-
-    search_opt_cmp => [ ( '=', '!=', '<', '<=', '>', '>=', 
-                          'LIKE', 'NOT LIKE', 'REGEXP', 'NOT REGEXP',
-                          'REGEXP BINARY', 'NOT REGEXP BINARY',
-                          ) ]
-    
-
-Or, transparently set the search operator in a hidden field:
-
-    search_opt_cmp => 'LIKE'
-    
-=item search_opt_order_by
-
-If true, will generate a widget to select (possibly multiple) columns to order the results by, 
-with an C<ASC> and C<DESC> option for each column.
-
-If set to an arrayref, will use that to build the widget. 
-
-    # order by any columns
-    search_opt_order_by => 1
-    
-    # or just offer a few
-    search_opt_order_by => [ 'foo', 'foo DESC', 'bar' ]
-    
-=back
-
-=cut
-
-sub search_form
-{
-    my $proto = shift;
-    
-    my $cdbifb = $proto->__form_builder_subclass__;
-    
-    my ( $orig, %args ) = $cdbifb->_get_args( $proto, @_ );
-    
-    my $cdbi_class = ref( $proto ) || $proto;
-    
-    my $form = $cdbifb->_make_form( $cdbi_class, $orig, %args );
-    
-    # make all selects multiple
-    foreach my $field ( $form->field )
-    {
-        next unless exists $form->field->{ $field }; # this looks a bit suspect
-        
-        $field->multiple( 1 ) if $field->options;
-                      
-        $field->required( 0 );
-    }   
-    
-    # ----- customise the search -----
-    # For processing a submitted form, remember that the field _must_ be added to the form 
-    # so that its submitted value can be extracted in search_where_from_form()
-    
-    # ----- order_by
-    # this must come before adding any other fields, because the list of columns 
-    # is taken from the form (not the CDBI class/object) so we match whatever 
-    # column selection happened during form construction
-    my %order_by_spec = ( name => 'search_opt_order_by',
-                          multiple => 1,
-                          );
-    
-    if ( my $order_by = delete $args{search_opt_order_by} )
-    {
-        $order_by = [ map  { $_, "$_ DESC" } 
-                      grep { $_->type ne 'hidden' } 
-                      $form->field 
-                      ] 
-                      unless ref( $order_by );
-        
-        $order_by_spec{options} = $order_by;
-    }
-
-    # ----- comparison operator    
-    my $cmp = delete( $args{search_opt_cmp} ) || '=';
-    
-    my %cmp_spec = ( name => 'search_opt_cmp' );
-    
-    if ( ref( $cmp ) )
-    {
-        $cmp_spec{options}  = $cmp;
-        $cmp_spec{value}    = $cmp->[0];
-        $cmp_spec{multiple} = undef;
-    }
-    else
-    {
-        $cmp_spec{value} = $cmp;
-        $cmp_spec{type}  = 'hidden';
-    }
-
-    $form->field( %cmp_spec );
-    
-    $form->field( %order_by_spec );    
-    
-    return $form;
-}
-
 =back
 
 =head2 Form modifiers
@@ -854,7 +1461,7 @@ Deprecated. Renamed C<form_pks>.
 =item form_pks
 
 Ensures primary column fields are included in the form (even if they were not included in the 
-C<fields> list), and hides them.
+C<fields> list), and hides them. Only forms representing objects will have primary column fields added.
 
 =cut
 
@@ -865,58 +1472,27 @@ sub form_pks
 {
     my ( $me, $them, $form, $pre_process ) = @_;
     
+    # don't add pk fields to class forms
     return unless ref $them;
     
     foreach my $field ( map {''.$_} $them->primary_columns )
     {
-        my $process = $pre_process->{ $field } || 'HIDDEN';
+        my $process = $me->_add_processors( 'HIDDEN', $pre_process->{ $field } ); # $pre_process->{ $field } || 'HIDDEN';
         
         $me->_process_field( $them, $form, $field, $process );
     }
 }
 
-=item form_timestamp
-
-Makes timestamp columns read only, since they will be set by the database.
-
-The default is to set the HTML C<disabled> attribute. This makes the field data un-selectable. 
-
-You may prefer to use the C<readonly> attribute instead, which allows the data to be selected 
-but not altered. Set a preprocessor for each C<timestamp> column in 
-C<< form_builder_defaults->{process_fields} >>, or in the arguments passed to C<as_form>..
-
-=cut
-
-sub form_timestamp
-{
-    my ( $me, $them, $form, $pre_process ) = @_;
-    
-    foreach my $field ( map {''.$_} $them->columns( 'All' ) )
-    {
-        next unless exists $form->field->{ $field };
-    
-        next unless $me->_get_type( $them, $field ) eq 'timestamp';
-    
-        my $process = $pre_process->{ $field } || 'DISABLED'; # 'READONLY'; # 
-        
-        $me->_process_field( $them, $form, $field, $process );
-    }
-}
-
-    
 =item form_options
 
 Identifies column types that should be represented as select, radiobutton or 
-checkbox widgets. Currently only works for MySQL C<enum> columns. 
-
-There is a simple patch for L<Class::DBI::mysql|Class::DBI::mysql> that enables this for MySQL C<set> 
-columns - see http://rt.cpan.org/NoAuth/Bug.html?id=12971
+checkbox widgets. Currently only works for MySQL C<ENUM> and C<SET> columns. 
 
 Patches are welcome for similar column types in other RDBMS's. 
 
-Note that you can easily emulate a MySQL C<enum> column by setting the validation for the column 
-to an arrayref of values. Haven't poked around yet to see how easily a C<set> column can 
-be emulated.
+Note that you can easily emulate a MySQL C<ENUM> column at the application level by setting 
+the validation for the column to an arrayref of values. Haven't poked around yet to see how 
+easily a C<SET> column can be emulated.
 
 =cut
 
@@ -928,8 +1504,8 @@ sub form_options
     {
         next unless exists $form->field->{ $field }; # $form->field( name => $field );
         
-        # OPTIONS_FROM_DB is a no-op if the db column isn't enum or set
-        my $process = $pre_process->{ $field } || 'OPTIONS_FROM_DB';
+        # +OPTIONS_FROM_DB is a no-op if the db column isn't enum or set
+        my $process = $me->_add_processors( 'OPTIONS_FROM_DB', $pre_process->{ $field } ); # $pre_process->{ $field } || 'OPTIONS_FROM_DB';
         
         $me->_process_field( $them, $form, $field, $process );
     }    
@@ -946,7 +1522,8 @@ sub _get_col_options_for_enumlike
         # MySQL enum
         last CASE if @series = eval { $them->enum_vals( $col ) };  
         # MySQL set
-        $multiple++, last CASE if @series = eval { $them->set_vals( $col ) };
+        #$multiple++, last CASE if @series = eval { $them->set_vals( $col ) };
+        $multiple++, last CASE if @series = $me->_set_vals( $them, $col );
         
         # other dbs go here
     }
@@ -954,23 +1531,16 @@ sub _get_col_options_for_enumlike
     return \@series, $multiple;
 }
 
-=item form_file
-
-B<Unimplemented> - at the moment, you need to set the field type to C<file> manually, or 
-in the C<process_fields> argument, set the field to C<FILE>.
-
-Figures out if a column contains file data. 
-
-This method will probably go away at some point, unless somebody can show me how to automatically 
-detect that a column stores binary data. 
-
-=cut
-
-sub form_file
+# a bit of sugar for MySQL - there's a patch for CDBI::mysql to do this in rt
+sub _set_vals
 {
-    my ( $me, $them, $form ) = @_;
-
-    return;
+    my ( $me, $them, $column ) = @_;
+    
+    my $type = $me->_get_meta( $them, $column, 'mysql_type_name' );
+    
+    return unless $type && $type =~ /^SET$/i;
+    
+    return @{ $me->_get_meta( $them, $column, 'mysql_values' ) }; 
 }
 
 =item form_has_a
@@ -979,8 +1549,8 @@ Populates a select-type widget with entries representing related objects. Makes 
 required.
 
 Note that this list will be very long if there are lots of rows in the related table. 
-You may need to override this method in that case. For instance, overriding with a 
-no-op will result in a standard C<text> type input widget.
+You may need to override this behaviour by setting up a pre-processor for your C<has_a> fields. See
+'Customising field construction'.
 
 This method assumes the primary key is a single column - patches welcome. 
 
@@ -1038,7 +1608,9 @@ sub form_has_a
         {
             my $class = "Class::DBI::FormBuilder::Plugin::$related_class";
                         
-            if ( $class->require )
+            # if the class is not in its own file, require will not find it, 
+            # even if it has been loaded
+            if ( eval { $class->can( 'field' ) } or $class->require )
             {
                 $class->field( $them, $form, $field );
             }
@@ -1233,10 +1805,79 @@ sub _field_options
     return \@options;
 }
 
+=item form_timestamp
+
+Makes timestamp columns read only, since they will be set by the database.
+
+The default is to use the C<TIMESTAMP> processor, which in turn points to the C<DISABLED> 
+processor, which sets the HTML C<disabled> attribute. This makes the field data un-selectable. 
+
+If you prefer, you can replace the C<TIMESTAMP> processor with one that points to C<READONLY> instead.
+
+=cut
+
+sub form_timestamp
+{
+    my ( $me, $them, $form, $pre_process ) = @_;
+    
+    foreach my $field ( map {''.$_} $them->columns( 'All' ) )
+    {
+        next unless exists $form->field->{ $field };
+    
+        next unless $me->_get_type( $them, $field ) eq 'timestamp';
+    
+        my $process = $me->_add_processors( 'TIMESTAMP', $pre_process->{ $field } ); #  || 'TIMESTAMP'; 
+        
+        $me->_process_field( $them, $form, $field, $process );
+    }
+}
+
+=item form_text
+
+Makes C<TEXT> columns into C<textarea> form fields. 
+
+=cut 
+
+sub form_text
+{
+    my ( $me, $them, $form, $pre_process ) = @_;
+
+    foreach my $field ( map {''.$_} $them->columns( 'All' ) )
+    {
+        next unless exists $form->field->{ $field };
+    
+        next unless $me->_get_type( $them, $field ) eq 'text';
+    
+        my $process = $me->_add_processors( [ '+SET_type(textarea)', '+VALUE' ], $pre_process->{ $field } ); #  || [ '+SET_type(textarea)', '+VALUE' ]; 
+        
+        $me->_process_field( $them, $form, $field, $process );
+    }
+}
+
+=item form_file
+
+B<Unimplemented> - at the moment, you need to set the field type to C<file> manually, or 
+in the C<process_fields> argument, set the field processor to C<FILE>.
+
+Figures out if a column contains file data. 
+
+This method will probably go away at some point, unless somebody can show me how to automatically 
+detect that a column stores binary data. 
+
+=cut
+
+sub form_file
+{
+    my ( $me, $them, $form ) = @_;
+
+    return;
+}
+
 =item form_process_extras
 
-This processor adds any fields in the C<process_fields> setup that do not exist. This is a useful method 
-for adding custom fields (i.e. fields that do not represent anything about the CDBI object) to a form. 
+This processor adds any fields in the C<process_fields> setup that do not yet exist on the form. 
+This is a useful method for adding custom fields (i.e. fields that do not represent anything about 
+the CDBI object) to a form. 
 
 =cut
 
@@ -1248,7 +1889,9 @@ sub form_process_extras
     {
         next if exists $form->field->{ $field }; 
         
-        my $process = $pre_process->{ $field };
+        #my $process = $pre_process->{ $field };
+        # this is just to help with debugging _add_processors
+        my $process = $me->_add_processors( [ ], $pre_process->{ $field } );
         
         $me->_process_field( $them, $form, $field, $process );
     }    
@@ -1256,191 +1899,7 @@ sub form_process_extras
 
 =back
 
-=head2 Plugins
-
-C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
-load (via C<require>) an appropriate plugin. For instance, for a C<Time::Piece> column, it will attempt 
-to load C<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, passing 
-the CDBI class for whom the form has been constructed, the form, and the name of the field being processed. 
-The plugin can use this information to modify the form, perhaps adding extra fields, or controlling 
-stringification, or setting up custom validation. 
-
-If no plugin is found, a fatal exception is thrown. If you have a situation where it would be useful to 
-simply stringify the object instead, let me know and I'll make this configurable.
-
-=head2 Customising field construction
-
-Often, the default behaviour will be unsuitable. For instance, a C<has_a> relationship might point to 
-a related table with thousands of records. A popup widget with all these records is probably not useful.  
-Also, it will take a long time to build, so post-processing the form to re-design the field is a 
-poor solution. 
-
-Instead, you can pass an extra C<process_fields> argument in the call to C<as_form> (or you can 
-set it in C<form_builder_defaults>).
-
-=over 4
-
-=item process_fields
-
-This is a hashref, with keys being field names. Values can be:
-
-=over 4
-
-=item Name of a built-in
-
-    basic             shortcut
-    -------------------------------------------------------------------------------
-    +HIDDEN           HIDDEN            make the field hidden
-    +VALUE            VALUE             display the current value
-    +READONLY         READONLY          display the current value - not editable
-    +DISABLED         DISABLED          display the current value - not editable, not selectable, (not submitted?)
-    +FILE             FILE              build a file upload widget
-    +OPTIONS_FROM_DB  OPTIONS_FROM_DB   check if the column is constrained to a few values
-    +REQUIRED                           make the field required
-    +NULL                               no-op - useful for debugging
-    +SET_VALUE($value)                  set the value of the field to $value
-    +ADD_FIELD                          add a new field to the form (only necessary if the field is empty)
-    
-The 'basic' versions apply only their own modification. The 'shortcut' version also applies 
-the C<+VALUE> processor. 
-    
-C<OPTIONS_FROM_DB> currently only supports MySQL ENUM or SET columns (the latter requires 
-a patch to L<Class::DBI::mysql>, see C<form_options> below). You probably won't need to use 
-this explicitly, as it's already used internally. 
-
-The C<+ADD_FIELD> processor is only necessary if you need to add a new field to a form, but don't want to 
-use any of the other processors on it. 
-
-=item Reference to a subroutine, or anonymous coderef
-
-The coderef will be passed the L<Class::DBI::FormBuilder> class or subclass, the CDBI class or 
-object, the L<CGI::FormBuilder> form object, and the field name as arguments, and should build the 
-named field. 
-
-=item Package name 
-
-Name of a package with a suitable C<field> subroutine. Gets called with the same arguments as 
-the coderef.
-
-=item Arrayref of the above
-
-Applies each processor in order. 
-
-=back
-
-=cut
-
-# ----------------------------------------------------------------- field processor architecture
-
-=item new_field_processor( $processor_name, $coderef or package name )
-
-This method is called on C<Class::DBI::FormBuilder> or a subclass. 
-
-It installs a new field processor, which can then be referred to by name in C<process_fields>, 
-rather than by passing a coderef. This method could also be used to replace the supplied built-in 
-field processors. The new processor must either be a coderef, or the name of a package with a 
-suitable C<field> method, or the name of another processor, or an arrayref of any of these.
-
-=back
-
-=cut   
-    
-# install a new default processor that can be referred to by name
-sub new_field_processor
-{
-    my ( $me, $p_name, $p ) = @_;
-    
-    my $coderef = $p if ref( $p ) eq 'CODE';
-    
-    unless ( $coderef )
-    {
-        $p->require || die "Error loading custom field processor package $p: $@";
-        
-        UNIVERSAL::can( $p, 'field' ) or die "$p does not have a field() subroutine";
-        
-        no strict 'refs';
-        $coderef = \&{"$p\::field"};    
-    }
-    
-    $me->field_processors->{ $p_name } = $coderef;    
-}
-
-# use a chain of processors to construct a field
-sub _process_field
-{
-    my ( $me, $them, $form, $field, $process ) = @_;
-    
-    my @agenda = ( $process );
-    
-    # Expand each item on the agenda. Arrayrefs get listified and unshifted back 
-    # on to the start of the agenda. Coderefs on the agenda are returned. Non-code scalars are 
-    # looked up in the pre-processors dispatch table, or in another package, and 
-    # unshifted onto the start of the agenda, because they may be pointing to 
-    # further keys in the dispatch table. 
-    my $chain;
-    
-    $chain = sub
-    {
-        my $next = pop( @agenda );
-        
-        return unless $next;
-        
-        return $next if ref( $next ) eq 'CODE';
-        
-        unshift @agenda, ref $next eq 'ARRAY' ? @$next : $me->_track_down( $next );
-        
-        return $chain->();    
-    };
-    
-    # pass the form to each sub in the chain and tweak the specified field
-    while ( my $p = $chain->() )
-    {
-        $p->( $me, $them, $form, $field );
-    }
-}
-
-sub _track_down
-{
-    my ( $me, $processor ) = @_;
-    
-    return $processor if ref( $processor ) eq 'CODE';
-    
-    my $p = $me->field_processors->{ $processor };
-    
-    # might be a coderef, might be another key
-    return $p if $p;
-    
-    # +SET_VALUE() special case
-    if ( $processor =~ /^\+SET_VALUE\(\s*(.*)\s*\)$/ )
-    {
-        my $value = $1;
-        
-        $p = sub { $_[FORM]->field( name  => $_[FIELD],
-                                    value => $value,   
-                                    );
-                 };
-                 
-        return $p;
-    }                                                      
-                                                      
-    # it's a field sub in another class
-    $processor->require or die "Couldn't load field processor package $processor: $@";
-    
-    $p = $processor->can( 'field' ) || die "No field method in $processor";
-    
-    return $p;
-}
-
 =head2 Form handling methods
-
-B<Note>: if you want to use this module alongside L<Class::DBI::FromForm|Class::DBI::FromForm>, 
-load the module like so
-
-    use Class::DBI::FormBuilder BePoliteToFromForm => 1;
-    
-and the following 2 methods will instead be imported as C<create_from_fb> and C<update_from_fb>.
-
-You might want to do this if you have more complex validation requirements than L<CGI::FormBuilder|CGI::FormBuilder> provides. 
 
 All these methods check the form like this
 
@@ -2075,131 +2534,9 @@ sub _run_retrieve_or_create_from_form
 
 =back
 
-=head1 Automatic validation setup
-
-If you place a normal L<CGI::FormBuilder|CGI::FormBuilder> validation spec in 
-C<< $class->form_builder_defaults->{validate} >>, that spec will be used to configure validation. 
-
-If there is no spec in C<< $class->form_builder_defaults->{validate} >>, then validation will 
-be configured automatically. The default configuration is pretty basic, but you can modify it 
-by placing settings in C<< $class->form_builder_defaults->{auto_validate} >>. 
-
-You must load L<Class::DBI::Plugin::Type|Class::DBI::Plugin::Type> in your class if using automatic 
-validation.
-
-=over 4
-
-=item Basic auto-validation
-
-Given no validation options for a column in the C<auto_validate> slot, the settings for most columns 
-will be taken from C<%Class::DBI::FormBuilder::ValidMap>. This maps SQL column types (as supplied by 
-L<Class::DBI::Plugin::Type|Class::DBI::Plugin::Type>) to the L<CGI::FormBuilder|CGI::FormBuilder> validation 
-settings C<VALUE>, C<INT>, or C<NUM>. 
-
-MySQL C<ENUM> or C<SET> columns will be set up to validate that the submitted value(s) match the allowed 
-values (although C<SET> column functionality requires the patch to CDBI::mysql mentioned above). 
-
-Any column listed in C<< $class->form_builder_defaults->{options} >> will be set to validate those values. 
-
-=item Advanced auto-validation
-
-The following settings can be placed in C<< $class->form_builder_defaults->{auto_validate} >>.
-
-=over 4
-
-=item validate
-
-Specify validate types for specific columns:
-
-    validate => { username   => [qw(nate jim bob)],
-                  first_name => '/^\w+$/',    # note the 
-                  last_name  => '/^\w+$/',    # single quotes!
-                  email      => 'EMAIL',
-                  password   => \&check_password,
-                  confirm_password => {
-                      javascript => '== form.password.value',
-                      perl       => 'eq $form->field("password")'
-                  }
-                          
-This option takes the same settings as the C<validate> option to C<CGI::FormBuilder::new()> 
-(i.e. the same as would otherwise go in C<< $class->form_builder_defaults->{validate} >>). 
-Settings here override any others. 
-
-=item skip_columns
-
-List of columns that will not be validated:
-
-    skip_columns => [ qw( secret_stuff internal_data ) ]
-
-=item match_columns
-
-Use regular expressions matching groups of columns to specify validation:
-
-    match_columns => { qr/(^(widget|burger)_size$/ => [ qw( small medium large ) ],
-                       qr/^count_.+$/             => 'INT',
-                       }
-                       
-=item validate_types
-
-Validate according to SQL data types:
-
-    validate_types => { date => \&my_date_checker,
-                       }
-                       
-Defaults are taken from the package global C<%TypesMap>. 
-                        
-=item match_types
-
-Use a regular expression to map SQL data types to validation types:
-
-    match_types => { qr(date) => \&my_date_checker,
-                     }
-                     
-=item debug
-    
-Control how much detail to report (via C<warn>) during setup. Set to 1 for brief 
-info, and 2 for a list of each column's validation setting.
-
-=item strict
-
-If set to 1, will die if a validation setting cannot be determined for any column. 
-Default is to issue warnings and not validate these column(s).
-    
-=back
-
-=item Validating relationships
-
-Although it would be possible to retrieve the IDs of all objects for a related column and use these to 
-set up validation, this would rapidly become unwieldy for larger tables. Default validation will probably be 
-acceptable in most cases, as the column type will usually be some kind of integer. 
-
-=item timestamp
-
-The default behaviour is to skip validating C<timestamp> columns. A warning will be issued
-if the C<debug> parameter is set to 2.
-
-=item Failures
-
-The default mapping of column types to validation types is set in C<%Class::DBI::FormBulder::ValidMap>, 
-and is probably incomplete. If you come across any failures, you can add suitable entries to the hash before calling C<as_form>. However, B<please> email me with any failures so the hash can be updated for everyone.
-
-=back
-
-$VAR1 = bless( {
-                 'foreign_class' => 'Referee',
-                 'name' => 'has_many',
-                 'args' => {
-                             'mapping' => [],
-                             'foreign_key' => 'consultant',
-                             'order_by' => undef
-                           },
-                 'class' => 'Consultant',
-                 'accessor' => 'referees'
-               }, 'Class::DBI::Relationship::HasMany' );
-
-
-
 =cut
+
+# ---------------------------------------------------------------------------------- validation -----
 
 sub _get_type
 {
@@ -2208,7 +2545,8 @@ sub _get_type
     # $col might be a related (has_many or might_have) accessor - i.e. it refers to a column in 
     # another table
     
-    my $type = $them->column_type( $col );
+    #my $type = $them->column_type( $col );
+    my $type = lc( $me->_get_meta( $them, $col, 'type' ) );
      
     unless ( $type )
     {
@@ -2218,7 +2556,8 @@ sub _get_type
         
         my $fk = $meta->{args}->{foreign_key};
         
-        $type = $other->column_type( $fk ) if $fk;            
+        #$type = $other->column_type( $fk ) if $fk;            
+        $type = lc( $me->_get_meta( $other, $fk, 'type' ) ) if $fk;            
     
         die "No type detected for column '$col' in '$them' or column '$fk' in '$other'" unless $type;
     }
@@ -2272,10 +2611,19 @@ sub _setup_auto_validation
         
         # look for columns with options
         # TODO - what about related columns? - do not want to add 10^6 db rows to validation
+        #           - the caller just has to set up a different config for these cases
              
         my $options = $them->form_builder_defaults->{options} || {};
         
         my $o = $options->{ $col };
+        
+        # $o could be an aref of arefs, each consisting of a value and a label - 
+        # we only want the values. Note that in general, there could be a mix of 
+        # arrayrefs and strings in the options list, e.g. for a leading empty item 
+        if ( ref( $o ) eq 'ARRAY' )
+        {
+            $o = [ map { ref( $_ ) eq 'ARRAY' ? $_->[0] : $_ } @$o ];
+        }
         
         unless ( $o )
         {
@@ -2358,6 +2706,8 @@ sub _get_auto_validate_args
     return %{ $fb_defaults->{auto_validate} };
 }
 
+# ---------------------------------------------------------------------------------- / validation -----
+
 =head1 TODO
 
 Better merging of attributes. For instance, it'd be nice to set some field attributes 
@@ -2366,7 +2716,10 @@ generated and added to C<%args>.
 
 Regex and column type entries for C<process_fields>, analogous to validation settings.
 
-Use preprocessors in form_has_a, form_has_many and form_has_a
+Use preprocessors in form_has_a, form_has_many and form_might_have.
+
+Wrap the call to C<$form_modify> in an eval, and provide a better diagnostic if the call 
+fails because it's trying to handle a relationship that has not yet been coded - e.g. is_a
 
 Store CDBI errors somewhere on the form. For instance, if C<update_from_form> fails because 
 no object could be retrieved using the form data. 

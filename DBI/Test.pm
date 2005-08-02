@@ -1,7 +1,7 @@
 {
     package DBI::Test;
     use base 'Class::DBI';
-    use Class::DBI::Plugin::Type;
+    #use Class::DBI::Plugin::Type;
     use Class::DBI::FormBuilder;
     # use the db set up in 01.create.t
     DBI::Test->set_db("Main", "dbi:SQLite2:dbname=test.db");

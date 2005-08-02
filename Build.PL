@@ -13,7 +13,6 @@ my $builder = Module::Build->new(
         'CGI::FormBuilder' => 0,
         'Class::Data::Inheritable' => 0,
         'Class::DBI' => 0,
-        'Class::DBI::Plugin::Type' => 0,
         'List::Util' => 0,
         'UNIVERSAL::require' => 0,
         

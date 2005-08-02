@@ -1,5 +1,25 @@
 Revision history for Class-DBI-FormBuilder
 
+0.41    Tues  2 Aug  2005, 23:40
+        - added _load_meta() method to access lots of column metadata via DBI:
+            - removed requirement to load Class::DBI::Plugin::Type
+            - fixed _db_order_columns() 
+            - support MySQL SET columns in _get_col_options_for_enumlike() without needing the 
+                patch to CDBI::mysql
+        - removed the code that sets the 'required' field list to the list in a 'Required' column
+            group - this has been deprecated for a while
+            
+            
+        - added TIMESTAMP processor. form_timestamp now uses this instead of DISABLED, so it can be easily 
+            replaced
+        - added +SET_$foo($bar) processor
+        - deprecated +SET_VALUE($value) processor - use +SET_value($value)
+        - altered the precedence rules for processors - a custom non '+' processor will have the effect 
+            of dropping all auto-generated processors, so that only the custom processors run. '+' 
+            processors are run in addition to automatically set processors.
+        
+        - re-organised POD
+
 0.4   Fri 22 July 2005, 23:00
         - added +READONLY processor - note this also sets the class of the input field to 'ReadOnly'
         - added +DISABLED processor - note this also sets the class of the input field to 'Disabled'
