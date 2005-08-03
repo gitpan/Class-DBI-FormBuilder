@@ -35,6 +35,8 @@ t/40.auto_untaint.t
 t/41.auto_untaint.t
 t/42.auto_untaint.t
 t/51.related.t
+t/60.alias.t
+t/61.alias.t
 t/99.cleanup.t
 t/pod-coverage.t
 t/pod.t

@@ -1,3 +1,4 @@
+#!/usr/bin/perl
 
 use strict;
 use warnings;
@@ -55,6 +56,19 @@ DBI::Test->db_Main->do("CREATE TABLE wackypk (
     poo text
 );");
 
+DBI::Test->db_Main->do("CREATE TABLE alias (
+    id integer not null primary key,
+    colour text,
+    fruit text,
+    town integer
+);");
+
+DBI::Test->db_Main->do("CREATE TABLE alias_has_many (
+    id integer not null primary key,
+    alias integer,
+    foo text
+);");
+
 
 my @towns = ( [ qw( Trumpton 250 150.7 160.8 PlayLand ) ],      # 1
               [ qw( Uglyton  1000000 10.2 8.3 Yuckland ) ],     # 2
@@ -70,6 +84,23 @@ foreach my $town ( @towns )
     #warn Dumper( \%data );
     Town->create( \%data );
 }
+
+Alias->create( { colour => 'green', 
+                 fruit  => 'apple',
+                 town   => 1,
+                 } ); 
+Alias->create( { colour => 'yellow', 
+                 fruit  => 'banana',
+                 town   => 2,
+                 } ); 
+                 
+AliasHasMany->create( { foo => 'bar',
+                        alias => 1,
+                        } );
+
+AliasHasMany->create( { foo => 'boor',
+                        alias => 1,
+                        } );
 
 ok(1);
 

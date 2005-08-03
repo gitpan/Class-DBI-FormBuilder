@@ -1,5 +1,17 @@
 Revision history for Class-DBI-FormBuilder
 
+0.42    Wed  3 Aug  2005, 23:50
+        - changed to using column objects throughout, and stringifying them via $column->mutator 
+            or $column->accessor whenever a field name is required (pointed out by Dave Howorth)
+            - PROBABLY STILL BROKEN THOUGH - works fine unless you are customising your CDBI accessors,
+                which was the point, but should be fixed in the next release
+        - added column_meta() and column_type() methods as public methods
+        - plugins now receive a column object instead of a field name
+        - processors now receive a column object as an extra argument (used by +VALUE)
+        - changed to retain values as objects wherever they are supplied as objects, and stringifying 
+            just before sending to CGI::FB
+        - added pretty-printing feature
+
 0.41    Tues  2 Aug  2005, 23:40
         - added _load_meta() method to access lots of column metadata via DBI:
             - removed requirement to load Class::DBI::Plugin::Type

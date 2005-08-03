@@ -4,12 +4,14 @@ use warnings;
 use strict;
 use Carp();
 
+use Data::Dumper;
+
 use List::Util();
 use CGI::FormBuilder 3;
 
 use UNIVERSAL::require;
 
-use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3 };
+use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3, COLUMN => 4 };
 
 use base 'Class::Data::Inheritable';
 
@@ -18,7 +20,19 @@ use base 'Class::Data::Inheritable';
 # but I need to track down which. UPDATE: the dev version now uses map { $_->name }
 # everywhere.
 
-our $VERSION = '0.41';
+# CDBI has accessor_name *and* mutator_name methods, so potentially, each column could 
+# have 2 methods to get/set its values, neither of which are the column's name.
+
+# Column objects can be queried for these method names: $col->accessor and $col->mutator
+
+# Not sure yet what to do about caller-supplied column names. 
+
+# General strategy: don't stringify anything until sending stuff to CGI::FB, at which point:
+#   1. stringify all values
+#   2. test field names to see if they are (CDBI column) objects, and if so, extract the 
+#       appropriate accessor or mutator name
+
+our $VERSION = '0.42';
 
 # process_extras *must* come last
 our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras );
@@ -63,20 +77,26 @@ __PACKAGE__->mk_classdata( field_processors => {} );
                                                           
                       VALUE => '+VALUE',
                       
-                      '+VALUE' => sub { 
+                      '+VALUE' => sub 
+                      { 
                                 my $value;
-                                eval {
-                                     $value = $_[THEM]->get( $_[FIELD] ) if ref( $_[THEM] );
-                                     
-                                     $value = ''.$value if defined( $value );  # CGI::FB chokes on objects
-                                     
-                                     $_[FORM]->field( name  => $_[FIELD],
-                                                      value => $value,   
-                                                      );
-                                };
                                 
-                                die "Error running +VALUE on '$_[THEM]' field: '$_[FIELD]' (value: '$value'): $@" if $@;
-                            },
+                                my $accessor = $_[COLUMN]->accessor;
+                                 
+                                eval { $value = $_[THEM]->$accessor if ref( $_[THEM] ) };
+                                     
+                                if ( $@ )
+                                {
+                                    die sprintf "Error running +VALUE on '%s' field: '%s' (value: '%s'): $@", 
+                                        $_[THEM], $_[COLUMN]->accessor, defined $value ? $value : 'undef';
+                                }
+                                
+                                $value = ''.$value if defined( $value );  # CGI::FB chokes on objects
+                                
+                                $_[FORM]->field( name  => $_[FIELD],
+                                                 value => $value,   
+                                                 );
+                      },
                             
                       TIMESTAMP => 'DISABLED',
                       
@@ -145,10 +165,65 @@ sub import
     
     $caller->can( 'form_builder_defaults' ) || $caller->mk_classdata( 'form_builder_defaults', {} );
     
+    # replace CGI::FB's render() method with one that accepts a PrettyPrint switch
+    if ( my $pp = $args{PrettyPrint} )
+    {
+        HTML::TreeBuilder->require || die "Couldn't load HTML::TreeBuilder: $@";
+        
+        my $render = \&CGI::FormBuilder::render;
+        
+        my $render_pretty = sub 
+        { 
+            my ( $cgifb, %args ) = @_;
+
+            if ( delete $args{PrettyPrint} or $pp eq 'ALL' )
+            {            
+                # the <div></div> is a trick to force HTML::TB to put the 
+                # noscript in the body and not in the head
+                my $html_in = '<div></div>' . $render->( $cgifb, %args );
+                
+                my $tree = HTML::TreeBuilder->new;
+                
+                $tree->store_comments( 1 );
+                #$tree->ignore_unknown( 0 );
+                $tree->no_space_compacting( 1 );
+                #$tree->warn( 1 );     
+                
+                $tree->parse( $html_in );
+                $tree->eof;
+                
+                my $html_out = $tree->guts->as_HTML( undef, '  ', {} );
+                
+                $tree->delete;
+                
+                # clean up after the <div></div> trick, and remove the outer div 
+                # added by the guts() call (which removed html-head-body implicit tags)
+                $html_out =~ s'^<div>\s*<div>\s*</div>'';
+                $html_out =~ s'</div>$'';
+                
+                return $html_out;
+            }
+            else
+            {
+                return $render->( $cgifb, %args );
+            }
+        };
+        
+        no warnings 'redefine';
+        *CGI::FormBuilder::render = $render_pretty;
+    }
+    
     # To support subclassing, store the FB (sub)class on the caller, and use that whenever we need
     # to call an internal method on the CDBI::FB class 
     # i.e. say $them->__form_builder_subclass__ instead of __PACKAGE__
     $caller->mk_classdata( __form_builder_subclass__ => $class );
+    
+    # _col_name_from_mutator_or_object() needs a cache of mutator_name => column_name
+    # on each CDBI class. Note that this accessor is used in a slightly unusual way, 
+    # by including a key on the CDBI class. Otherwise, lookups on one class could 
+    # fall through to an inherited map, rather than the map for the class we're 
+    # interested in. So the map is only stored on $caller.
+    $caller->mk_classdata( __mutator_to_name__ => {} );
     
     my @export = qw( as_form 
                      search_form
@@ -195,6 +270,9 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     
     use base 'Class::DBI';
     use Class::DBI::FormBuilder;
+    
+    # for indented output:
+    # use Class::DBI::FormBuilder PrettyPrint => 'ALL';
     
     # POST all forms to server
     Film->form_builder_defaults->{method} = 'post';
@@ -281,6 +359,8 @@ Many of the internal routines use this mechanism for configuring fields. A manua
 (basic) processor will be B<added> to any other automatic processing, whereas a manually set shortcut 
 processor (no '+') will B<replace> all automatic processing. 
 
+You can add your own processors to the internal table of processors - see C<new_field_processor>.
+
 =head2 process_fields
 
 This is a hashref, with keys being field names. Values can be:
@@ -335,10 +415,12 @@ Applies each processor in order.
 
 C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
 load (via C<require>) an appropriate plugin. For instance, for a C<Time::Piece> column, it will attempt 
-to load C<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, passing 
-the CDBI class for whom the form has been constructed, the form, and the name of the field being processed. 
-The plugin can use this information to modify the form, perhaps adding extra fields, or controlling 
-stringification, or setting up custom validation. 
+to load C<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, 
+passing the CDBI class for whom the form has been constructed, the form, and a L<Class::DBI::Column> object 
+representing the field being processed. The plugin can use this information to modify the form, perhaps 
+adding extra fields, or controlling stringification, or setting up custom validation. Note that the name of 
+the form field should be retrieved from the field object as C<< $field->mutator >>, rather than relying 
+on C< $field > to stringify itself, because it will stringify to C<< lc( $field->name >>.
 
 If no plugin is found, a fatal exception is thrown. If you have a situation where it would be useful to 
 simply stringify the object instead, let me know and I'll make this configurable.
@@ -450,9 +532,25 @@ and is probably incomplete. If you come across any failures, you can add suitabl
 
 =cut
 
-=head1 Gotchas
+=head1 Other features
 
 =over 4
+
+=item Pretty printing
+
+If you load the module like so:
+
+    use Class::DBI::FormBuilder PrettyPrint => 'ALL';
+    
+form output will be indented for easier readability. This option requires L<HTML::TreeBuilder>. 
+
+If you say:
+
+    use Class::DBI::FormBuilder PrettyPrint => 1;
+    
+output will only be indented if you ask for it:
+
+    print $form->render( PrettyPrint => 1 );
 
 =item Class::DBI::FromForm
 
@@ -469,8 +567,8 @@ You might want to do this if you have more complex validation requirements than 
 
 =head1 METHODS
 
-Almost all the methods described here are exported into the caller's namespace, except for the form modifiers 
-(see below), and C<new_field_processor>. 
+Most of the methods described here are exported into the caller's namespace, except for the form modifiers 
+(see below), and a few others as documented. 
 
 =over 4
 
@@ -485,6 +583,22 @@ field processors, for example to alter the default C<TIMESTAMP> behaviour (see C
 The new processor must either be a coderef, or the name of a package with a 
 suitable C<field> method, or the name of another processor, or an arrayref of any of these.
 
+The code ref will be passed these arguments: 
+
+    position    argument
+    --------------------
+       0        name of the calling class (i.e. Class::DBI::FormBuilder or a subclass)
+       1        Class::DBI object or class name
+       2        CGI::FormBuilder form object
+       3        name of the current field
+       4        Class::DBI::Column object for the current field
+     
+The name of the current field is the name used on the form object, and is also the B<mutator> accessor 
+for the column on the CDBI object (which defaults to the name in the database, but can be different). 
+
+The column object is useful if the processor needs access to the value in the CDBI object, but the 
+mutator name is different from the column accessor e.g. see the C<+VALUE> processor.
+       
 =cut   
     
 # ----------------------------------------------------------------- field processor architecture -----
@@ -514,12 +628,18 @@ sub _process_field
 {
     my ( $me, $them, $form, $field, $process ) = @_;
     
+    # $field will normally be a CDBI column object
+    my $field_name = ref $field ? $field->mutator : $field;
+    
+    # some processors (e.g. +VALUE) need access to accessor name, not mutator name
+    my $column = ref $field ? $field : $me->_column_from_mutator( $them, $field );
+    
     my $chain = $me->_build_processor_chain( $process );
     
     # pass the form to each sub in the chain and tweak the specified field
     while ( my $p = $chain->() )
     {
-        $p->( $me, $them, $form, $field );
+        $p->( $me, $them, $form, $field_name, $column );
     }
 }
 
@@ -603,14 +723,18 @@ sub _track_down
     return $p;
 }
 
-# Combines automatic and custom processors. Accepts 2 sets of processors. The second (the custom 
-# processors set for the field, if any) is 
+# Combines automatic and custom processors. Custom processors are 
 # traversed until a 'stop' processor is found (a named processor without a leading '+'). 
-# If found, returns the second (custom) set only. If no 'stop' processor is found, appends the 
-# second set to the first set. 
+# If found, returns the custom set only. If no 'stop' processor is found, appends the 
+# custom set to the auto set. 
 sub _add_processors
 {
-    my ( $me, $auto, $custom ) = @_;
+    my ( $me, $field, $pre_process, $auto ) = @_;
+    
+    # $field will usually be a CDBI column object
+    my $field_name = ref $field ? $field->mutator : $field;
+    
+    my $custom = $pre_process->{ $field_name };
     
     #warn sprintf "Combining procs %s and %s\n", $auto || '', $custom || '';
     
@@ -621,12 +745,12 @@ sub _add_processors
     
     while ( my $name = $chain->() )
     {
-        warn "Checking custom processor $name for stop";
-        warn "Dropping automatic processors - found custom stop processor $name" if $name !~ /^\+/;
+        #warn "Checking custom processor $name for stop";
+        #warn "Dropping automatic processors - found custom stop processor $name" if $name !~ /^\+/;
         return $custom if $name !~ /^\+/;
     }
     
-    return [ $auto, $custom ];
+    return [ $auto, $custom ]; # it's OK if either are already arrayrefs
 }
 
 # only use this to look at the names, not to do any processing, because it throws away 
@@ -683,6 +807,320 @@ sub _build_named_processor_chain
 }
 
 # ----------------------------------------------------------------- / field processor architecture -----
+
+# ----------------------------------------------------------------------- column meta data -----
+# this is used to: fix _db_order_columns, remove requirement for CDBI::P::Type, 
+#                   remove requirement for patch to CDBI::mysql for SET columns
+# it could also:   provide extra hints for column size, 
+sub _load_meta
+{
+    my ( $me, $them ) = @_;
+    
+    my $class = ref( $them ) || $them;
+    
+    $class->mk_classdata( '__fb_meta' );
+    
+    my $dbh   = $them->db_Main;
+    my $table = $them->table;
+    my $meta  = {};
+    
+    # undef does not constrain the data returned for that key
+    # I'm suspicious that setting catalog and schema to undef might break RDBMSs that actually 
+    # do supply that information. 
+    
+    #                                catalog schema table   column
+    if ( my $sth = $dbh->column_info( undef, undef, $table, '%' ) )
+    {
+        $dbh->errstr  && die "Error getting column info sth: " . $dbh->errstr;
+        $sth->execute or die "Error executing column info: "   . $sth->errstr;
+        
+        my $column_info = $sth->fetchall_hashref( [ qw( TABLE_CAT TABLE_SCHEM TABLE_NAME COLUMN_NAME ) ] )
+                                ->{''}->{''}->{ $table };
+                                
+        foreach my $col ( keys %$column_info )
+        {
+            $meta->{ $col } = { map { $_ => $column_info->{ $col }->{ $_ } } 
+                                    qw( COLUMN_DEF         COLUMN_SIZE     DECIMAL_DIGITS 
+                                        NULLABLE           IS_NULLABLE  
+                                        ORDINAL_POSITION   TYPE_NAME
+                                        mysql_values       mysql_type_name )
+                                 };
+        }
+    }
+    else
+    {
+        # typeless db e.g. sqlite
+        
+        $class->set_sql(fbdummy => 'SELECT * FROM __TABLE__ WHERE 1=0' );
+    
+        my $sth = $class->sql_fbdummy;
+        
+        $sth->execute;
+        
+        # see 'Statement Handle Attributes' in the DBI docs for a list of available attributes
+        my $cols  = $sth->{NAME};
+        my $types = $sth->{TYPE};
+        # my $sizes = $sth->{PRECISION};    empty
+        # my $nulls = $sth->{NULLABLE};     empty
+        
+        my $order = 0;
+        
+        foreach my $col ( @$cols )
+        {
+            $meta->{ $col }->{NULLABLE}         = 1;
+            $meta->{ $col }->{IS_NULLABLE}      = 'yes';
+            $meta->{ $col }->{ORDINAL_POSITION} = $order++;
+            $meta->{ $col }->{TYPE_NAME}        = shift( @$types ); # varchar or varchar(xxx) is OK
+        }
+    }
+        
+    $them->__fb_meta( $meta );
+}
+
+=item column_meta( $them, $column, $key )
+
+L<Class::DBI::FormBuilder> class method.
+
+Returns information about the specified column or columns. 
+
+C<$column> must either be the B<mutator> accessor to the column, or a L<Class::DBI::Column> object. The 
+mutator accessor defaults to the column name, unless your class has a C<mutator_name> method. 
+
+C<$column> can also be an arrayref of the above. 
+
+The following keys are available:
+
+    order           # ordinal position of the column in the database
+    type            # column type 
+    
+    # these return '1' and 'yes' for typeless databases (SQLite):
+    nullable        # 0 => no, 1 => yes, 2 => unknown
+    is_nullable     # no, yes, ''
+    
+    # these return undef for typeless databases (SQLite):
+    default         # default value of the column
+    size    
+    digits
+    
+    # MySQL:
+    mysql_values    
+    mysql_type_name
+    
+For typeless databases (SQLite), C<type> returns whatever string the type was set to in the schema - so 
+you might see things like C<VARCHAR>, C<varchar>, C<varchar(255)> or C<VARCHAR(255)> etc.
+
+Otherwise C<type> is the uppercase SQL type, i.e. C<VARCHAR> etc.
+
+=cut
+
+{
+    my %MetaMap = reverse ( COLUMN_DEF        => 'default',
+                            COLUMN_SIZE       => 'size',
+                            DECIMAL_DIGITS    => 'digits',
+                            NULLABLE          => 'nullable',    # 0 => no, 1 => yes, 2 => unknown
+                            IS_NULLABLE       => 'is_nullable', # no, yes, ''
+                            ORDINAL_POSITION  => 'order',
+                            TYPE_NAME         => 'type',
+                            # mysql_values      => '',
+                            # mysql_type_name   => '',
+                            );
+                    
+    sub column_meta
+    {
+        my ( $me, $them, $column, $key ) = @_;
+        
+        Carp::croak "Must supply a CDBI class/object, a column mutator name or object, and a key to query on" 
+            unless @_ == 4;
+        
+        my @columns = map { $me->_col_name_from_mutator_or_object( $them, $_ ) } 
+                          ( ref( $column ) eq 'ARRAY' ) ? @$column : ( $column );
+        
+        #warn "Got columns from: " . Dumper( $column );
+        
+        $me->_load_meta( $them ) unless $them->can( '__fb_meta' );
+        
+        my $k = $MetaMap{ $key } || $key;
+        
+        #warn "Looking in meta: " . Dumper( $them->__fb_meta );
+        
+        my @rv = map { $them->__fb_meta->{ $_ }->{ $k } } @columns;
+        
+        # be careful with calling context e.g. 
+        #   my $type = lc $me->column_meta( $them, $col, 'type' );
+        # instead of
+        #   my $type = lc scalar $me->column_meta( $them, $col, 'type' );
+        return @rv > 1 ? @rv : $rv[0];
+    }
+}
+
+=item column_type( $them, $col )
+
+Provides consistent output when using C<column_meta> to query a column's type. 
+
+C<$column> must either be the B<mutator> accessor to the column, or a L<Class::DBI::Column> object. 
+
+Returns the type in lower case, with supefluous bits chopped off. So C<VARCHAR(255)> is returned 
+as C<varchar>.
+
+For C<has_many> and similar (e.g. C<might_have>) relationships, returns the type of the column in 
+the related class. 
+
+=cut
+
+# used in validation
+sub column_type
+{
+    my ( $me, $them, $col ) = @_;
+    
+    # $col might be a related (has_many or might_have) accessor - i.e. it refers to a column in 
+    # another table
+    
+    Carp::croak "Must supply a CDBI class/object, and a column mutator name or object" unless @_ == 3;
+    
+    #my $type = $them->column_type( $col );
+    my $type = lc $me->column_meta( $them, $col, 'type' );
+     
+    unless ( $type )
+    {
+        my ( $other, $rel_type ) = $me->_related_class_and_rel_type( $them, $col );
+        
+        my $meta = $them->meta_info( $rel_type, $col );
+        
+        my $fk = $meta->{args}->{foreign_key};
+        
+        #$type = $other->column_type( $fk ) if $fk;            
+        $type = lc( $me->column_meta( $other, $fk, 'type' ) ) if $fk;            
+    
+        die "No type detected for column '$col' in '$them' or column '$fk' in '$other'" unless $type;
+    }
+    
+    # $type may be something like varchar(255)
+    
+    #$type =~ s/[^a-z]*$//;
+    $type =~ s/\(.+$//;
+    
+    return $type;
+}
+                  
+# Column metainfo lookup (whether via CDBI::mysql::enum_vals(), or column_meta()), needs to 
+# know the name of the column in the database, and we may only know the name of the mutator 
+# if we are working from user input
+sub _col_name_from_mutator_or_object
+{
+    my ( $me, $them, $col ) = @_;
+    
+    return $col->name if ref $col;
+    
+    # $col is the mutator name
+    
+    my $cdbi_class = ref( $them ) || $them;
+    
+    # __mutator_to_name__() is installed in import()
+    my $map = $them->__mutator_to_name__->{ $cdbi_class };
+    
+    unless ( $map )
+    {
+        $map = { map { $_->mutator => $_->name } $them->columns( 'All' ) };
+        
+        $them->__mutator_to_name__->{ $cdbi_class } = $map;
+    }
+    
+    
+    #my $name = $map->{ $col } or warn "Couldn't find column name for mutator '$col' in $cdbi_class";
+    
+    # might not exist, if 'mutator' is for a custom field added to the form (e.g. the search fields)
+    # or if it's a has_many type rel (not sure if these ever get passed to this routine, but the former 
+    # do )
+    return $map->{ $col }; 
+}
+
+# 'mutator' may be the name of a field that doesn't exist in the db, in which case, 
+# it returns undef
+sub _column_from_mutator
+{
+    my ( $me, $them, $mutator ) = @_;
+    
+    die "mutator should be a string: got $mutator" if ref $mutator;
+    
+    my $name = $me->_col_name_from_mutator_or_object( $them, $mutator );
+     
+    return unless $name;
+    
+    $them->find_column( $name );
+}
+
+=begin notes
+
+$VAR1 = { catalogue schema   table            column           meta
+          '' => {
+                  '' => {
+                          'consultant' => {
+                                            '_telephone' => {
+                                                              'COLUMN_DEF' => '',
+                                                              'mysql_values' => undef,
+                                                              'NUM_PREC_RADIX' => undef,
+                                                              'COLLATION_CAT' => undef,
+                                                              'TABLE_SCHEM' => undef,
+                                                              'DOMAIN_NAME' => undef,
+                                                              'COLLATION_NAME' => undef,
+                                                              'REMARKS' => undef,
+                                                              'mysql_type_name' => 'varchar(64)',
+                                                              'COLUMN_SIZE' => '64',
+                                                              'SCOPE_NAME' => undef,
+                                                              'TYPE_NAME' => 'VARCHAR',
+                                                              'UDT_NAME' => undef,
+                                                              'NULLABLE' => 0,
+                                                              'DATA_TYPE' => 12,
+                                                              'TABLE_NAME' => 'consultant',
+                                                              'DOMAIN_SCHEM' => undef,
+                                                              'CHAR_SET_CAT' => undef,
+                                                              'COLLATION_SCHEM' => undef,
+                                                              'CHAR_SET_NAME' => undef,
+                                                              'DECIMAL_DIGITS' => undef,
+                                                              'UDT_CAT' => undef,
+                                                              'SCOPE_CAT' => undef,
+                                                              'TABLE_CAT' => undef,
+                                                              'CHAR_OCTET_LENGTH' => undef,
+                                                              'BUFFER_LENGTH' => undef,
+                                                              'IS_NULLABLE' => 'NO',
+                                                              'MAX_CARDINALITY' => undef,
+                                                              'ORDINAL_POSITION' => 18,
+                                                              'UDT_SCHEM' => undef,
+                                                              'COLUMN_NAME' => '_telephone',
+                                                              'DTD_IDENTIFIER' => undef,
+                                                              'mysql_is_pri_key' => '',
+                                                              'SQL_DATA_TYPE' => 12,
+                                                              'CHAR_SET_SCHEM' => undef,
+                                                              'IS_SELF_REF' => undef,
+                                                              'DOMAIN_CAT' => undef,
+                                                              'SCOPE_SCHEM' => undef,
+                                                              'SQL_DATETIME_SUB' => undef
+                                                            },
+                                                            
+=end notes
+
+=cut
+
+sub _db_order_columns 
+{
+    my ( $me, $them, $group ) = @_;
+    
+    $group ||= 'All';
+
+    my @columns = $them->columns( $group );
+    
+    my @orders  = $me->column_meta( $them, \@columns, 'order' );
+    
+    my %c_o = map { $_ => shift( @columns ) } @orders;
+    
+    #warn "Column order for group $group: " . Dumper( \%c_o );
+    
+    my @ordered = map { $c_o{ $_ } } sort keys %c_o;
+    
+    return @ordered;
+} 
+
+# ----------------------------------------------------------------------- / column meta data -----
 
 =back
 
@@ -766,19 +1204,13 @@ sub as_form
     my $me = $them->__form_builder_subclass__;
     
     return scalar $me->_as_form( $them, %args_in );    
-    
-#    my ( $orig, %args ) = $me->_get_args( $them, %args_in );
-    
-#    $me->_setup_auto_validation( $them, \%args );
-    
-#    return $me->_make_form( $them, $orig, %args );
 }
 
 sub _as_form
 {
     my ( $me, $them, %args_in ) = @_;
     
-    # search_form does not validate input
+    # search_form does not (automatically) validate input
     my $skip_validation = delete $args_in{__SKIP_VALIDATION__};
     
     my ( $orig, %args ) = $me->_get_args( $them, %args_in );
@@ -804,9 +1236,7 @@ sub search_form
     
     # make all selects multiple, no fields required unless explicitly set, 
     # and change textareas back into text inputs
-    
     my %force_required = map { $_ => 1 } @{ $args{required} || [] };
-    
     foreach my $field ( $form->field )
     {
         next unless exists $form->field->{ $field }; 
@@ -824,6 +1254,8 @@ sub search_form
     # ----- customise the search -----
     # For processing a submitted form, remember that the field _must_ be added to the form 
     # so that its submitted value can be extracted in search_where_from_form()
+    my $order_by_field_name = 'search_opt_order_by';
+    my $cmp_field_name      = 'search_opt_cmp';
     
     # ----- order_by
     # this must come before adding any other fields, because the list of columns 
@@ -833,7 +1265,7 @@ sub search_form
                           multiple => 1,
                           );
     
-    if ( my $order_by = delete $args{search_opt_order_by} )
+    if ( my $order_by = delete $args{ $order_by_field_name } )
     {
         $order_by = [ map  { ''.$_, "$_ DESC" } 
                       grep { $_->type ne 'hidden' } 
@@ -845,7 +1277,7 @@ sub search_form
     }
     
     # ----- comparison operator    
-    my $cmp = delete( $args{search_opt_cmp} ) || '=';
+    my $cmp = delete( $args{ $cmp_field_name } ) || '=';
     
     my %cmp_spec; # = ( name => 'search_opt_cmp' );
     
@@ -866,7 +1298,7 @@ sub search_form
     
     # if the caller has passed in some custom settings, they will have caused the field to be 
     # auto-vivified
-    if ( my $cmp_field = $fields{search_opt_cmp} )
+    if ( my $cmp_field = $fields{ $cmp_field_name } )
     {
         # this (used to?) causes a warning when setting the value, which may mean the value has already been set before
         $cmp_field->$_( $cmp_spec{ $_ } ) for keys %cmp_spec;    
@@ -874,16 +1306,16 @@ sub search_form
     else
     # otherwise, we need to auto-vivify it now
     {
-        $form->field( name => 'search_opt_cmp', %cmp_spec );    
+        $form->field( name => $cmp_field_name, %cmp_spec );    
     }
     
-    if ( my $order_by_field = $fields{search_opt_order_by} )
+    if ( my $order_by_field = $fields{ $order_by_field_name } )
     {
         $order_by_field->$_( $order_by_spec{ $_ } ) for keys %order_by_spec;   
     }
     else
     {
-        $form->field( name => 'search_opt_order_by', %order_by_spec );    
+        $form->field( name => $order_by_field_name, %order_by_spec );    
     }
     
     # ...why did this stop working? - I think because sometimes the fields are auto-vivified before getting 
@@ -899,7 +1331,7 @@ sub _get_args
 {
     my ( $me, $them, %args_in ) = @_;
     
-    @{ $args_in{fields} } = map { ''.$_ } @{ $args_in{fields} } if $args_in{fields};
+    #@{ $args_in{fields} } = map { ''.$_ } @{ $args_in{fields} } if $args_in{fields};
     
     # NOTE: this still means any custom processors for a given field, will replace all default 
     #           processors for that field, but at least we can mix some fileds having default 
@@ -915,23 +1347,22 @@ sub _get_args
     # take a copy, and make sure not to transform undef into []
     my $original_fields = $args{fields} ? [ @{ $args{fields} } ] : undef;
     
-    my %pk = map { ''.$_ => 1 } $them->primary_columns;
+    my %pk = map { $_ => $_ } $them->primary_columns;
     
-    $args{fields} ||= [ map  {''.$_} 
-                        grep { ! $pk{ ''.$_ } }    
-                        #$proto->columns( 'All' ) 
-                        $me->_db_order_columns( $them, 'All' )
-                        ];
+    $args{fields} ||= [ grep { ! $pk{ $_ } } $me->_db_order_columns( $them, 'All' ) ];
                         
-    push( @{ $args{keepextras} }, keys %pk ) unless ( $args{keepextras} && $args{keepextras} == 1 );
+    push( @{ $args{keepextras} }, values %pk ) unless ( $args{keepextras} && $args{keepextras} == 1 );
     
     # for objects, populate with data
     if ( ref $them )
     {
         # nb. can't simply say $proto->get( $_ ) because $_ may be an accessor installed by a relationship 
         # (e.g. has_many) - get() only works with real columns. 
-        my @values = eval { map { my $v = $them->$_; defined $v ? ''.$v : undef } # column might be NULL, 
-                            @{ $args{fields} }                                    # or return an object
+        # Note that has_many and might_have and has_a fields are re-processed later (in form_* methods), 
+        # it might become necessary to filter them out here?
+        my @values = eval { map { $them->$_ }  # may return a scalar, undef, or object (or objects for has_many?)
+                            map { ref $_ ? $_->accessor : $_ }
+                            @{ $args{fields} } # may be strings or CDBI column objects
                             };
         
         die "Error populating values for $them from '@{ $args{fields} }': $@" if $@;
@@ -951,7 +1382,9 @@ sub _make_form
     
     my $pre_process = delete( $args{process_fields} ) || {};
     
-    my $form = CGI::FormBuilder->new( %args );
+    my %clean_args = $me->_stringify_args( %args );
+    
+    my $form = CGI::FormBuilder->new( %clean_args );
     
     $form->{__cdbi_original_args__} = $orig;
     
@@ -966,171 +1399,36 @@ sub _make_form
     return $form;
 }
 
-# ----------------------------------------------------------------------- column meta data -----
-# this is used to: fix _db_order_columns, remove requirement for CDBI::P::Type, 
-#                   remove requirement for patch to CDBI::mysql for SET columns
-# it could also:   provide extra hints for column size, 
-sub _load_meta
+# If any columns are supplied as CDBI column objects, we need to change them into the appropriate 
+# string, which is supplied by the mutator method on the column. 
+# Also, CGI::FB does some argument pre-processing that chokes on objects, even if the objects can be 
+# stringified, so values need to be stringified here. 
+sub _stringify_args
 {
-    my ( $me, $them ) = @_;
+    my ( $me, %args ) = @_;
     
-    my $class = ref( $them ) || $them;
+    #warn "Dirty args: " . Dumper( \%args );
+
+    # fields - but this could also be a hashref?
+    @{ $args{fields} } = map { ref $_ ? $_->mutator : $_ } @{ $args{fields} };
     
-    $class->mk_classdata( '__fb_meta' );
+    # keepextras
+    @{ $args{keepextras} } = map { ref $_ ? $_->mutator : $_ } @{ $args{keepextras} };
     
-    my $dbh   = $them->db_Main;
-    my $table = $them->table;
-    my $meta  = {};
     
-    # undef does not constrain the data returned for that key
-    # I'm suspicious that setting catalog and schema to undef might break RDBMSs that actually 
-    # do supply that information. 
+    # values
+    @{ $args{values} } = map { defined $_ ? ''.$_ : undef } @{ $args{values} };
     
-    #                                catalog schema table   column
-    if ( my $sth = $dbh->column_info( undef, undef, $table, '%' ) )
-    {
-        $dbh->errstr  && die "Error getting column info sth: " . $dbh->errstr;
-        $sth->execute or die "Error executing column info: "   . $sth->errstr;
-        
-        my $column_info = $sth->fetchall_hashref( [ qw( TABLE_CAT TABLE_SCHEM TABLE_NAME COLUMN_NAME ) ] )
-                                ->{''}->{''}->{ $table };
-                                
-        foreach my $col ( keys %$column_info )
-        {
-            $meta->{ $col } = { map { $_ => $column_info->{ $col }->{ $_ } } 
-                                    qw( COLUMN_DEF         COLUMN_SIZE     DECIMAL_DIGITS 
-                                        NULLABLE           IS_NULLABLE  
-                                        ORDINAL_POSITION   TYPE_NAME
-                                        mysql_values       mysql_type_name )
-                                 };
-        }
-    }
-    else
-    {
-        # typeless db e.g. sqlite
-        
-        $class->set_sql(fbdummy => 'SELECT * FROM __TABLE__ WHERE 1=0' );
     
-        my $sth = $class->sql_fbdummy;
-        
-        $sth->execute;
-        
-        # see 'Statement Handle Attributes' in the DBI docs for a list of available attributes
-        my $cols  = $sth->{NAME};
-        my $types = $sth->{TYPE};
-        # my $sizes = $sth->{PRECISION};    empty
-        # my $nulls = $sth->{NULLABLE};     empty
-        
-        my $order = 0;
-        
-        foreach my $col ( @$cols )
-        {
-            $meta->{ $col }->{NULLABLE}         = 1;
-            $meta->{ $col }->{IS_NULLABLE}      = 'yes';
-            $meta->{ $col }->{ORDINAL_POSITION} = $order++;
-            $meta->{ $col }->{TYPE_NAME}        = shift( @$types ); # varchar or varchar(xxx) is OK
-        }
-    }
-        
-    $them->__fb_meta( $meta );
+    # validate
+    
+    
+    # auto_validate is still in here - needs to be removed
+    
+    
+    #warn "Clean args: " . Dumper( \%args );
+    return %args;
 }
-
-{
-    my %MetaMap = reverse ( COLUMN_DEF        => 'default',
-                            COLUMN_SIZE       => 'size',
-                            DECIMAL_DIGITS    => 'digits',
-                            NULLABLE          => 'nullable',    # 0 => no, 1 => yes, 2 => unknown
-                            IS_NULLABLE       => 'is_nullable', # no, yes, ''
-                            ORDINAL_POSITION  => 'order',
-                            TYPE_NAME         => 'type',
-                            # mysql_values      => '',
-                            # mysql_type_name   => '',
-                            );
-                    
-    sub _get_meta
-    {
-        my ( $me, $them, $column, $key ) = @_;
-        
-        $me->_load_meta( $them ) unless $them->can( '__fb_meta' );
-        
-        my $k = $MetaMap{ $key } || $key;
-        
-        return $them->__fb_meta->{ $column }->{ $k } unless ref( $column ) eq 'ARRAY';
-        
-        return map { $them->__fb_meta->{ $_ }->{ $k } } @$column;
-    }
-}
-
-=begin notes
-
-$VAR1 = { catalogue schema   table            column           meta
-          '' => {
-                  '' => {
-                          'consultant' => {
-                                            '_telephone' => {
-                                                              'COLUMN_DEF' => '',
-                                                              'mysql_values' => undef,
-                                                              'NUM_PREC_RADIX' => undef,
-                                                              'COLLATION_CAT' => undef,
-                                                              'TABLE_SCHEM' => undef,
-                                                              'DOMAIN_NAME' => undef,
-                                                              'COLLATION_NAME' => undef,
-                                                              'REMARKS' => undef,
-                                                              'mysql_type_name' => 'varchar(64)',
-                                                              'COLUMN_SIZE' => '64',
-                                                              'SCOPE_NAME' => undef,
-                                                              'TYPE_NAME' => 'VARCHAR',
-                                                              'UDT_NAME' => undef,
-                                                              'NULLABLE' => 0,
-                                                              'DATA_TYPE' => 12,
-                                                              'TABLE_NAME' => 'consultant',
-                                                              'DOMAIN_SCHEM' => undef,
-                                                              'CHAR_SET_CAT' => undef,
-                                                              'COLLATION_SCHEM' => undef,
-                                                              'CHAR_SET_NAME' => undef,
-                                                              'DECIMAL_DIGITS' => undef,
-                                                              'UDT_CAT' => undef,
-                                                              'SCOPE_CAT' => undef,
-                                                              'TABLE_CAT' => undef,
-                                                              'CHAR_OCTET_LENGTH' => undef,
-                                                              'BUFFER_LENGTH' => undef,
-                                                              'IS_NULLABLE' => 'NO',
-                                                              'MAX_CARDINALITY' => undef,
-                                                              'ORDINAL_POSITION' => 18,
-                                                              'UDT_SCHEM' => undef,
-                                                              'COLUMN_NAME' => '_telephone',
-                                                              'DTD_IDENTIFIER' => undef,
-                                                              'mysql_is_pri_key' => '',
-                                                              'SQL_DATA_TYPE' => 12,
-                                                              'CHAR_SET_SCHEM' => undef,
-                                                              'IS_SELF_REF' => undef,
-                                                              'DOMAIN_CAT' => undef,
-                                                              'SCOPE_SCHEM' => undef,
-                                                              'SQL_DATETIME_SUB' => undef
-                                                            },
-                                                            
-=end notes
-
-=cut
-
-# ----------------------------------------------------------------------- / column meta data -----
-
-sub _db_order_columns 
-{
-    my ( $me, $them, $group ) = @_;
-    
-    $group ||= 'All';
-
-    my @columns = $them->columns( $group );
-    
-    my @orders  = $me->_get_meta( $them, \@columns, 'order' );
-    
-    my %c_o = map { $_ => shift( @columns ) } @orders;
-    
-    my @ordered = map { $c_o{ $_ } } sort keys %c_o;
-    
-    return @ordered;
-} 
 
 =item as_form_with_related
 
@@ -1219,7 +1517,7 @@ sub _splice_form
     # related pkdata are encoded in the fake field name
     warn 'not sure if pk for related objects is getting added - if so, it should not';
     
-    warn "need to add 'add relatives' button";
+    #warn "need to add 'add relatives' button"; - see Maypole edit template now
     return unless ref $them; # for now
     
     my $related_form = $them->as_form( %$args );
@@ -1230,7 +1528,7 @@ sub _splice_form
     
     foreach my $related_field ( $related_form->fields )
     {
-        my $related_field_name = $related_field->name;
+        my $related_field_name = $related_field->name; # XXX mutator
         
         my $fake_name = $me->_false_related_field_name( $them, $related_field_name );
         
@@ -1475,9 +1773,9 @@ sub form_pks
     # don't add pk fields to class forms
     return unless ref $them;
     
-    foreach my $field ( map {''.$_} $them->primary_columns )
+    foreach my $field ( $them->primary_columns )
     {
-        my $process = $me->_add_processors( 'HIDDEN', $pre_process->{ $field } ); # $pre_process->{ $field } || 'HIDDEN';
+        my $process = $me->_add_processors( $field, $pre_process, 'HIDDEN' ); 
         
         $me->_process_field( $them, $form, $field, $process );
     }
@@ -1500,12 +1798,12 @@ sub form_options
 {
     my ( $me, $them, $form, $pre_process ) = @_;
     
-    foreach my $field ( map {''.$_} $them->columns('All') )
+    foreach my $field ( $them->columns('All') )
     {
-        next unless exists $form->field->{ $field }; # $form->field( name => $field );
+        next unless exists $form->field->{ $field->mutator }; # $form->field( name => $field );
         
         # +OPTIONS_FROM_DB is a no-op if the db column isn't enum or set
-        my $process = $me->_add_processors( 'OPTIONS_FROM_DB', $pre_process->{ $field } ); # $pre_process->{ $field } || 'OPTIONS_FROM_DB';
+        my $process = $me->_add_processors( $field, $pre_process, 'OPTIONS_FROM_DB' ); 
         
         $me->_process_field( $them, $form, $field, $process );
     }    
@@ -1516,11 +1814,17 @@ sub _get_col_options_for_enumlike
 {
     my ( $me, $them, $col ) = @_;
     
+    # NOTE: enum_vals() needs the column name in the database, but _set_vals() 
+    #           calls column_meta(), which expects either the mutator name, or a column object    
+    
+    my $col_name = $me->_col_name_from_mutator_or_object( $them, $col );
+        
     my ( @series, $multiple );
 
     CASE: {
         # MySQL enum
-        last CASE if @series = eval { $them->enum_vals( $col ) };  
+        last CASE if @series = eval { $them->enum_vals( $col_name ) };   
+                                                                    
         # MySQL set
         #$multiple++, last CASE if @series = eval { $them->set_vals( $col ) };
         $multiple++, last CASE if @series = $me->_set_vals( $them, $col );
@@ -1536,11 +1840,11 @@ sub _set_vals
 {
     my ( $me, $them, $column ) = @_;
     
-    my $type = $me->_get_meta( $them, $column, 'mysql_type_name' );
+    my $type = $me->column_meta( $them, $column, 'mysql_type_name' );
     
     return unless $type && $type =~ /^SET$/i;
     
-    return @{ $me->_get_meta( $them, $column, 'mysql_values' ) }; 
+    return @{ $me->column_meta( $them, $column, 'mysql_values' ) }; 
 }
 
 =item form_has_a
@@ -1566,15 +1870,16 @@ sub form_has_a
     
     my $meta = $them->meta_info( 'has_a' ) || return;
     
-    my @haves = keys %$meta;
+    # warn "has_a meta: " . Dumper( $meta );
+    
+    my @haves = map { $them->find_column( $_ ) } keys %$meta;
     
     foreach my $field ( @haves ) 
     {
-        #$me->_set_field_options( $them, $form, $field, { required => 1 } ) || next;
-        next unless exists $form->field->{ $field };
+        next unless exists $form->field->{ $field->mutator };
         
         # if a custom field processor has been supplied, use that
-        my $processor = $pre_process->{ $field };
+        my $processor = $pre_process->{ $field->mutator };
         $me->_process_field( $them, $form, $field, $processor ) if $processor;
         next if $processor;        
         
@@ -1589,16 +1894,17 @@ sub form_has_a
             
             if ( ref $them )
             {
-                $related_object = $them->get( $field ) || die sprintf
+                my $accessor = $field->accessor;
+                $related_object = $them->$accessor || die sprintf # $them->get( $field ) || die sprintf
                 'Failed to retrieve a related object from %s has_a field %s - inconsistent db?',
-                    ref( $them ), $field;
+                    ref( $them ), $accessor;
                     
                 my $pk = $related_object->primary_column;
                     
                 $value = $related_object->$pk; 
             }
                 
-            $form->field( name     => $field,
+            $form->field( name     => $field->mutator,
                           options  => $options,
                           required => 1,
                           value    => $value,
@@ -1651,6 +1957,7 @@ sub form_has_many
     # BUT - do not create the new field if it wasn't in the list passed in the original 
     # args, or if [] was passed in the original args. 
     
+    # note that these are *not* columns in $them
     foreach my $field ( @has_many_fields )
     {
         # the 'next' condition is not tested because @wanted lists fields that probably 
@@ -1714,6 +2021,7 @@ sub form_might_have
     
     my @might_have_fields = $me->_multiplicity_fields( $them, $form, 'might_have' );
     
+    # note that these are *not* columns in $them
     foreach my $field ( @might_have_fields ) 
     {
         # the 'next' condition is not tested because @wanted lists fields that probably 
@@ -1765,7 +2073,7 @@ sub _multiplicity_fields
 {
     my ( $me, $them, $form, $rel ) = @_;
     
-    die "Bad rel: $rel" unless $rel =~ /^(?:has_many|might_have)$/;
+    die "Can't handle $rel relationships yet" unless $rel =~ /^(?:has_many|might_have)$/;
 
     my $meta = $them->meta_info( $rel ) || return;
     
@@ -1781,6 +2089,8 @@ sub _multiplicity_fields
     return @wanted;
 }
 
+# $field can be a CDBI column object, or the name of a has_many etc. field - i.e. not a column 
+# in $them, but in another class
 sub _field_options
 {
     my ( $me, $them, $form, $field ) = @_;
@@ -1799,7 +2109,7 @@ sub _field_options
     
     while ( my $object = $iter->next )
     {
-        push @options, [ $object->$pk, ''.$object ];
+        push @options, [ $object->$pk, ''.$object ]; 
     }
     
     return \@options;
@@ -1820,13 +2130,13 @@ sub form_timestamp
 {
     my ( $me, $them, $form, $pre_process ) = @_;
     
-    foreach my $field ( map {''.$_} $them->columns( 'All' ) )
+    foreach my $field ( $them->columns( 'All' ) )
     {
-        next unless exists $form->field->{ $field };
+        next unless exists $form->field->{ $field->mutator };
     
-        next unless $me->_get_type( $them, $field ) eq 'timestamp';
+        next unless $me->column_type( $them, $field ) eq 'timestamp';
     
-        my $process = $me->_add_processors( 'TIMESTAMP', $pre_process->{ $field } ); #  || 'TIMESTAMP'; 
+        my $process = $me->_add_processors( $field, $pre_process, 'TIMESTAMP' ); 
         
         $me->_process_field( $them, $form, $field, $process );
     }
@@ -1842,13 +2152,13 @@ sub form_text
 {
     my ( $me, $them, $form, $pre_process ) = @_;
 
-    foreach my $field ( map {''.$_} $them->columns( 'All' ) )
+    foreach my $field ( $them->columns( 'All' ) )
     {
-        next unless exists $form->field->{ $field };
+        next unless exists $form->field->{ $field->mutator };
     
-        next unless $me->_get_type( $them, $field ) eq 'text';
+        next unless $me->column_type( $them, $field ) eq 'text';
     
-        my $process = $me->_add_processors( [ '+SET_type(textarea)', '+VALUE' ], $pre_process->{ $field } ); #  || [ '+SET_type(textarea)', '+VALUE' ]; 
+        my $process = $me->_add_processors( $field, $pre_process, [ '+SET_type(textarea)', '+VALUE' ] ); 
         
         $me->_process_field( $them, $form, $field, $process );
     }
@@ -1868,7 +2178,7 @@ detect that a column stores binary data.
 
 sub form_file
 {
-    my ( $me, $them, $form ) = @_;
+    my ( $me, $them, $form, $pre_process ) = @_;
 
     return;
 }
@@ -1891,7 +2201,7 @@ sub form_process_extras
         
         #my $process = $pre_process->{ $field };
         # this is just to help with debugging _add_processors
-        my $process = $me->_add_processors( [ ], $pre_process->{ $field } );
+        my $process = $me->_add_processors( $field, $pre_process, [ ] );
         
         $me->_process_field( $them, $form, $field, $process );
     }    
@@ -1921,64 +2231,34 @@ Creates and returns a new object.
 
 sub create_from_form 
 {
-    my ( $class, $fb ) = @_;
+    my ( $them, $form ) = @_;
     
-    Carp::croak "create_from_form can only be called as a class method" if ref $class;
+    Carp::croak "create_from_form can only be called as a class method" if ref $them;
     
-    return unless $fb->submitted && $fb->validate;
+    return unless $form->submitted && $form->validate;
     
-    return $class->create( $class->__form_builder_subclass__->_fb_create_data( $class, $fb ) );
+    return $them->create( $them->__form_builder_subclass__->_fb_create_data( $them, $form ) );
 }
 
 sub _fb_create_data
 {
-    my ( $me, $class, $fb ) = @_;
+    my ( $me, $them, $form ) = @_;
     
     my $cols = {};
     
-    my $data = $fb->fields;
+    my $data = $form->fields;
     
-    foreach my $col ( map {''.$_} $class->columns('All') ) 
+    foreach my $field ( map { $_->mutator } $them->columns('All') ) 
     {
-        next unless exists $data->{ $col };
+        next unless exists $data->{ $field };
         
-        $cols->{ $col } = $data->{ $col };
+        $cols->{ $field } = $data->{ $field };
     }
 
     return $cols;
 }
 
 =begin crud
-
-# If pk values are created in the database (e.g. in a MySQL AUTO_INCREMENT 
-# column), then they will not be available in the new object. Neither will 
-# anything else, because CDBI discards all data before returning the new 
-# object. 
-sub _create_object
-{
-    my ( $me, $class, $data ) = @_;
-    
-    die "_create_object needs a CDBI class, not an object" if ref( $class );
-    
-    my $obj = $class->create( $data );
-    
-    my @pcs = map { $obj->get( $_ ) } $obj->primary_columns;
-    
-    my $ok; 
-    $ok &&= $_ for @pcs;
-    
-    return $obj if $ok; # every primary column has a value
-    
-    die "No pks for new object $obj" unless @pcs == 1; # 1 undef value - we can find it
-    
-    # this works for MySQL and SQLite - these may be the only dbs that don't 
-    # supply the pk data in the first place?
-    my $id = $obj->_auto_increment_value;
-    
-    return $class->retrieve( $id ) || die "Could not retrieve newly created object with ID '$id'";
-}
-
-=end crud
 
 =item update_from_form( $form )
 
@@ -2022,6 +2302,7 @@ sub _run_update
     # they should result in an undef value being sent to the object.
     my %coldata = map  { $_ => $formdata->{ $_ } } 
                   grep { exists $formdata->{ $_ } }
+                  map  { $_->mutator }
                   $them->columns( 'All' );
     
     $them->set( %coldata );
@@ -2033,7 +2314,7 @@ sub _run_update
 
 =item update_from_form_with_related
 
-Sorry about the name, alternative suggestions welcome.
+B<DEPRECATED> - and doesn't work anyway. Will be integrated with C<update_from_form>, one day.
 
 =cut
 
@@ -2273,26 +2554,24 @@ If none exists (or if no values for primary keys are supplied), a new object is 
 
 sub update_or_create_from_form
 {
-    my $class = shift;
+    my ( $them, $form ) = @_;
     
-    Carp::croak "update_or_create_from_form can only be called as a class method" if ref $class;
+    Carp::croak "update_or_create_from_form can only be called as a class method" if ref $them;
 
-    $class->__form_builder_subclass__->_run_update_or_create_from_form( $class, @_ );
+    $them->__form_builder_subclass__->_run_update_or_create_from_form( $them, $form );
 }
 
 sub _run_update_or_create_from_form
 {
-    my ( $me, $them, $fb ) = @_;
+    my ( $me, $them, $form ) = @_;
 
-    return unless $fb->submitted && $fb->validate;
+    return unless $form->submitted && $form->validate;
 
-    #my $formdata = $fb->fields;
-
-    my $object = $them->retrieve_from_form( $fb );
+    my $object = $them->retrieve_from_form( $form );
     
-    return $object->update_from_form( $fb ) if $object;
+    return $object->update_from_form( $form ) if $object;
     
-    $them->create_from_form( $fb );
+    $them->create_from_form( $form );
 }
 
 =back
@@ -2302,9 +2581,10 @@ sub _run_update_or_create_from_form
 Note that search methods (except for C<retrieve_from_form>) will return a CDBI iterator 
 in scalar context, and a (possibly empty) list of objects in list context.
 
-All the search methods except C<retrieve_from_form> require that the submitted form should either be built using 
-C<search_form> (not C<as_form>), or should supply all C<required> (including C<has_a>) fields. 
-Otherwise they may fail validation checks for missing required fields. 
+All the search methods except C<retrieve_from_form> require that the submitted form should be 
+built using C<search_form> (not C<as_form>). Otherwise the form may fail validation checks 
+because of missing required fields specified by C<as_form> (C<search_form> does not automatically 
+configure any fields as required).
 
 =over 4
 
@@ -2316,22 +2596,22 @@ Use primary key data in a form to retrieve a single object.
 
 sub retrieve_from_form
 {
-    my $class = shift;
+    my ( $them, $form ) = @_;
     
-    Carp::croak "retrieve_from_form can only be called as a class method" if ref $class;
+    Carp::croak "retrieve_from_form can only be called as a class method" if ref $them;
 
-    $class->__form_builder_subclass__->_run_retrieve_from_form( $class, @_ );
+    $them->__form_builder_subclass__->_run_retrieve_from_form( $them, $form );
 }
 
 sub _run_retrieve_from_form
 {
-    my ( $me, $them, $fb ) = @_;
+    my ( $me, $them, $form ) = @_;
     
     # we don't validate because pk data must side-step validation as it's 
     # unknowable in advance whether they will even be present. 
     #return unless $fb->submitted && $fb->validate;
     
-    my %pkdata = map { $_ => $fb->cgi_param( ''.$_ ) || undef } $them->primary_columns;
+    my %pkdata = map { $_ => $form->cgi_param( $_->mutator ) || undef } $them->primary_columns;
     
     return $them->retrieve( %pkdata );
 }
@@ -2344,11 +2624,11 @@ Lookup by column values.
 
 sub search_from_form 
 {
-    my $class = shift;
+    my ( $them, $form ) = @_;
     
-    Carp::croak "search_from_form can only be called as a class method" if ref $class;
+    Carp::croak "search_from_form can only be called as a class method" if ref $them;
 
-    $class->__form_builder_subclass__->_run_search_from_form( $class, '=', @_ );
+    $them->__form_builder_subclass__->_run_search_from_form( $them, '=', $form );
 }
 
 =item search_like_from_form
@@ -2361,18 +2641,18 @@ Note that the submitted form should be built using C<search_form>, not C<as_form
 
 sub search_like_from_form
 {
-    my $class = shift;
+    my ( $them, $form ) = @_;
     
-    Carp::croak "search_like_from_form can only be called as a class method" if ref $class;
+    Carp::croak "search_like_from_form can only be called as a class method" if ref $them;
 
-    $class->__form_builder_subclass__->_run_search_from_form( $class, 'LIKE', @_ );
+    $them->__form_builder_subclass__->_run_search_from_form( $them, 'LIKE', $form );
 }
 
 sub _run_search_from_form
 {    
-    my ( $me, $them, $search_type, $fb ) = @_;
+    my ( $me, $them, $search_type, $form ) = @_;
     
-    return unless $fb->submitted && $fb->validate;
+    return unless $form->submitted && $form->validate;
 
     my %searches = ( LIKE => 'search_like',
                      '='  => 'search',
@@ -2380,14 +2660,11 @@ sub _run_search_from_form
                      
     my $search_method = $searches{ $search_type };
     
-    my @search = $me->_get_search_spec( $them, $fb );
+    my @search = $me->_get_search_spec( $them, $form );
     
-    # Probably you would normally sort results in the output page, rather 
-    # than in the search form. Might be useful to specify the initial sort order 
-    # in a hidden 'sort_by' field.
     my @modifiers = qw( order_by order_direction ); # others too
     
-    my %search_modifiers = $me->_get_search_spec( $them, $fb, \@modifiers );
+    my %search_modifiers = $me->_get_search_spec( $them, $form, \@modifiers );
     
     push( @search, \%search_modifiers ) if %search_modifiers;
     
@@ -2396,16 +2673,16 @@ sub _run_search_from_form
 
 sub _get_search_spec
 {
-    my ( $me, $them, $fb, $fields ) = @_;
+    my ( $me, $them, $form, $fields ) = @_;
 
-    my @fields = $fields ? @$fields : $them->columns( 'All' );
+    my @fields = $fields ? @$fields : map { $_->accessor } $them->columns( 'All' );
 
     # this would miss multiple items
     #my $formdata = $fb->fields;
     
     my $formdata;
     
-    foreach my $field ( $fb->fields )
+    foreach my $field ( $form->fields )
     {
         my @data = $field->value;
         
@@ -2432,21 +2709,21 @@ is executed (returns all rows), no matter what search operator may have been sel
 
 sub search_where_from_form
 {
-    my $class = shift;
+    my ( $them, $form ) = @_;
     
-    Carp::croak "search_where_from_form can only be called as a class method" if ref $class;
+    Carp::croak "search_where_from_form can only be called as a class method" if ref $them;
 
-    $class->__form_builder_subclass__->_run_search_where_from_form( $class, @_ );
+    $them->__form_builder_subclass__->_run_search_where_from_form( $them, $form );
 }
 
 # have a look at Maypole::Model::CDBI::search()
 sub _run_search_where_from_form
 {
-    my ( $me, $them, $fb ) = @_;
+    my ( $me, $them, $form ) = @_;
     
-    return unless $fb->submitted && $fb->validate;
+    return unless $form->submitted && $form->validate;
 
-    my %search_data = $me->_get_search_spec( $them, $fb );
+    my %search_data = $me->_get_search_spec( $them, $form );
     
     # clean out empty fields
     do { delete( $search_data{ $_ } ) unless $search_data{ $_ } } for keys %search_data;
@@ -2456,7 +2733,7 @@ sub _run_search_where_from_form
                       search_opt_order_by => 'order_by',
                       );
     
-    my %search_modifiers = $me->_get_search_spec( $them, $fb, [ keys %modifiers ] );
+    my %search_modifiers = $me->_get_search_spec( $them, $form, [ keys %modifiers ] );
     
     # rename modifiers for SQL::Abstract - taking care not to autovivify entries
     $search_modifiers{ $modifiers{ $_ } } = delete( $search_modifiers{ $_ } ) 
@@ -2482,20 +2759,20 @@ Does a C<find_or_create> using submitted form data.
     
 sub find_or_create_from_form
 {
-    my $class = shift;
+    my ( $them, $form ) = @_;
     
-    Carp::croak "find_or_create_from_form can only be called as a class method" if ref $class;
+    Carp::croak "find_or_create_from_form can only be called as a class method" if ref $them;
 
-    $class->__form_builder_subclass__->_run_find_or_create_from_form( $class, @_ );
+    $them->__form_builder_subclass__->_run_find_or_create_from_form( $them, $form );
 }
 
 sub _run_find_or_create_from_form
 {
-    my ( $me, $them, $fb ) = @_;
+    my ( $me, $them, $form ) = @_;
 
-    return unless $fb->submitted && $fb->validate;
+    return unless $form->submitted && $form->validate;
 
-    my %search_data = $me->_get_search_spec( $them, $fb );
+    my %search_data = $me->_get_search_spec( $them, $form );
     
     return $them->find_or_create( \%search_data );    
 }
@@ -2511,24 +2788,24 @@ update pre-existing objects.
 
 sub retrieve_or_create_from_form
 {
-    my $class = shift;
+    my ( $them, $form ) = @_;
     
-    Carp::croak "retrieve_or_create_from_form can only be called as a class method" if ref $class;
+    Carp::croak "retrieve_or_create_from_form can only be called as a class method" if ref $them;
 
-    $class->__form_builder_subclass__->_run_retrieve_or_create_from_form( $class, @_ );
+    $them->__form_builder_subclass__->_run_retrieve_or_create_from_form( $them, $form );
 }
 
 sub _run_retrieve_or_create_from_form
 {
-    my ( $me, $them, $fb ) = @_;
+    my ( $me, $them, $form ) = @_;
 
-    return unless $fb->submitted && $fb->validate;
+    return unless $form->submitted && $form->validate;
 
-    my $object = $them->retrieve_from_form( $fb );
+    my $object = $them->retrieve_from_form( $form );
     
     return $object if $object;
     
-    $them->create_from_form( $fb );
+    $them->create_from_form( $form );
 }
 
 
@@ -2538,37 +2815,6 @@ sub _run_retrieve_or_create_from_form
 
 # ---------------------------------------------------------------------------------- validation -----
 
-sub _get_type
-{
-    my ( $me, $them, $col ) = @_;
-    
-    # $col might be a related (has_many or might_have) accessor - i.e. it refers to a column in 
-    # another table
-    
-    #my $type = $them->column_type( $col );
-    my $type = lc( $me->_get_meta( $them, $col, 'type' ) );
-     
-    unless ( $type )
-    {
-        my ( $other, $rel_type ) = $me->_related_class_and_rel_type( $them, $col );
-        
-        my $meta = $them->meta_info( $rel_type, $col );
-        
-        my $fk = $meta->{args}->{foreign_key};
-        
-        #$type = $other->column_type( $fk ) if $fk;            
-        $type = lc( $me->_get_meta( $other, $fk, 'type' ) ) if $fk;            
-    
-        die "No type detected for column '$col' in '$them' or column '$fk' in '$other'" unless $type;
-    }
-    
-    # $type may be something like varchar(255)
-    
-    $type =~ s/[^a-z]*$//;
-
-    return $type;
-}
-                  
 sub _valid_map
 {
     my ( $me, $type ) = @_;
@@ -2576,13 +2822,14 @@ sub _valid_map
     return $ValidMap{ $type };
 }
 
+# $fb_args is the args hash that will be sent to CGI::FB to construct the form. 
+# Here we re-write $fb_args->{validate}
 sub _setup_auto_validation 
 {
     my ( $me, $them, $fb_args ) = @_;
     
-    # $fb_args is the args hash that will be sent to CGI::FB to construct the form. 
-    # Here we re-write $fb_args->{validate}
-    
+    # this simply returns either the auto-validation spec (as set up by the caller), or 
+    # undef (if the caller has set up a standard CGI::FB validation spec)
     my %args = $me->_get_auto_validate_args( $them );
      
     return unless %args;
@@ -2601,13 +2848,13 @@ sub _setup_auto_validation
     
     my %validate; 
     
-    # $col->name preserves case - stringifying doesn't
-    foreach my $col ( @{ $fb_args->{fields} } ) 
+    # $col_mname is column mutator name
+    foreach my $col_mname ( map { ref $_ ? $_->mutator : $_ } @{ $fb_args->{fields} } ) 
     {
-        next if $skip{ $col };    
+        next if $skip{ $col_mname };    
         
         # this will get added at the end
-        next if $v_cols->{ $col }; 
+        next if $v_cols->{ $col_mname }; 
         
         # look for columns with options
         # TODO - what about related columns? - do not want to add 10^6 db rows to validation
@@ -2615,25 +2862,26 @@ sub _setup_auto_validation
              
         my $options = $them->form_builder_defaults->{options} || {};
         
-        my $o = $options->{ $col };
+        my $o = $options->{ $col_mname };
         
         # $o could be an aref of arefs, each consisting of a value and a label - 
         # we only want the values. Note that in general, there could be a mix of 
         # arrayrefs and strings in the options list, e.g. for a leading empty item 
         if ( ref( $o ) eq 'ARRAY' )
         {
-            $o = [ map { ref( $_ ) eq 'ARRAY' ? $_->[0] : $_ } @$o ];
+            $o = [ map { ref $_ eq 'ARRAY' ? $_->[0] : $_ } @$o ];
         }
         
         unless ( $o )
         {
-            my ( $series, undef ) = $me->_get_col_options_for_enumlike( $them, $col );
+            my ( $series, undef ) = $me->_get_col_options_for_enumlike( $them, $col_mname );
             $o = $series; 
-            warn "(Probably) setting validation to options (@$o) for $col in $them" if ( $args{debug} > 1 and @$o );
+            warn "(Probably) setting validation to options (@$o) for $col_mname in $them" 
+                if ( $args{debug} > 1 and @$o );
             undef( $o ) unless @$o;            
         }
         
-        my $type = $me->_get_type( $them, $col );
+        my $type = $me->column_type( $them, $col_mname );
         
         my $v = $o || $v_types->{ $type }; 
                  
@@ -2646,18 +2894,18 @@ sub _setup_auto_validation
         foreach my $regex ( keys %$match_cols )
         {
             last if $v;
-            $v = $match_cols->{ $regex } if $col =~ $regex;
+            $v = $match_cols->{ $regex } if $col_mname =~ $regex;
         }
         
         my $skip_ts = ( ( $type eq 'timestamp' ) && ! $v );
         
-        warn "Skipping $them $col [timestamp]\n" if ( $skip_ts and $args{debug} > 1 );
+        warn "Skipping $them $col_mname [timestamp]\n" if ( $skip_ts and $args{debug} > 1 );
         
         next if $skip_ts;
         
         $v ||= $me->_valid_map( $type ) || '';
         
-        my $fail = "No validate type detected for column $col, type $type in $them"
+        my $fail = "No validate type detected for column $col_mname, type $type in $them"
             unless $v;
             
         $fail and $args{strict} ? die $fail : warn $fail;
@@ -2665,10 +2913,10 @@ sub _setup_auto_validation
         my $type2 = substr( $type, 0, 25 );
         $type2 .= '...' unless $type2 eq $type;
         
-        warn sprintf "Untainting %s %s [%s] as %s\n", $them, $col, $type2, $v
+        warn sprintf "Untainting %s %s [%s] as %s\n", $them, $col_mname, $type2, $v
                 if $args{debug} > 1;
         
-        $validate{ $col } = $v if $v;
+        $validate{ $col_mname } = $v if $v;
     }
     
     my $validation = { %validate, %$v_cols };
@@ -2692,15 +2940,17 @@ sub _get_auto_validate_args
     
     if ( %{ $fb_defaults->{validate} || {} } && %{ $fb_defaults->{auto_validate} || {} } )
     {
-        die "Got validation AND auto-validation settings in form_builder_defaults (should only have one or other)";
+        Carp::croak 'Got validation AND auto-validation settings in form_builder_defaults - ' . 
+                        'should only have one or the other';
     }
     
+    # don't do auto-validation if the caller has set up a standard CGI::FB validation spec
     return if %{ $fb_defaults->{validate} || {} };
     
     #use Data::Dumper;
     #warn "automating with config " . Dumper( $fb_defaults->{auto_validate} );
     
-    # stop lots of warnings, and ensure something is set so the cfg exists test passes
+    # stop lots of warnings when testing debug value, and ensure something is set so the cfg exists test passes
     $fb_defaults->{auto_validate}->{debug} ||= 0;
     
     return %{ $fb_defaults->{auto_validate} };

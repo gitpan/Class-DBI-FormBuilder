@@ -1,11 +1,9 @@
 {
     package DBI::Test;
     use base 'Class::DBI';
-    #use Class::DBI::Plugin::Type;
-    use Class::DBI::FormBuilder;
+    use Class::DBI::FormBuilder PrettyPrint => 1;
     # use the db set up in 01.create.t
     DBI::Test->set_db("Main", "dbi:SQLite2:dbname=test.db");
-#    DBI::Test->table("test");
 }
 
 {   # might_have
@@ -58,5 +56,31 @@
     Wackypk->columns(Primary => 'wooble'); # or put wooble 1st in the list above
 }
 
+{
+    package Alias;
+    use base 'DBI::Test';
+    Alias->table( 'alias' );
+    Alias->columns(All => qw/id colour fruit town/);
+    Alias->columns(Stringify => 'fruit' );
+    
+    Alias->has_a( town => 'Town' );
+    
+    Alias->has_many( alias_has_many => 'AliasHasMany' );
+    Alias->might_have( job => Job => qw/jobtitle employer salary/ );
+    
+    
+    sub accessor_name { "get_$_[1]" }
+    sub mutator_name  { "set_$_[1]" }
+}
 
+{
+    package AliasHasMany;
+    use base 'DBI::Test';
+    AliasHasMany->table( 'alias_has_many' );
+    AliasHasMany->columns( All => qw/id alias foo/ );
+    AliasHasMany->columns( Stringify => 'foo' );
+    AliasHasMany->has_a( alias => 'Alias' );
+}    
+    
+    
 1;
