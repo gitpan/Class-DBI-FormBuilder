@@ -32,7 +32,7 @@ use base 'Class::Data::Inheritable';
 #   2. test field names to see if they are (CDBI column) objects, and if so, extract the 
 #       appropriate accessor or mutator name
 
-our $VERSION = '0.42';
+our $VERSION = '0.421';
 
 # process_extras *must* come last
 our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras );

@@ -20,7 +20,10 @@ $ENV{REQUEST_METHOD} = 'GET';
 $ENV{QUERY_STRING}   = '';
 
 # basic tests
-{
+SKIP: {
+    
+    skip 'with_related functionality not ready', 2;
+
     my $dbaird = Person->retrieve( 1 );
     
     isa_ok( $dbaird, 'Class::DBI' );

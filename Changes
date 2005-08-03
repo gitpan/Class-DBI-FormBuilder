@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.421   Wed  3 Aug  2005, 23:55
+        - skip annoying tests in 51.related.t
+
 0.42    Wed  3 Aug  2005, 23:50
         - changed to using column objects throughout, and stringifying them via $column->mutator 
             or $column->accessor whenever a field name is required (pointed out by Dave Howorth)
