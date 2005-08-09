@@ -15,6 +15,11 @@ use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3, COLUMN => 4 };
 
 use base 'Class::Data::Inheritable';
 
+our $VERSION = '0.431';
+
+# process_extras *must* come 2nd last
+our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );
+
 # C::FB sometimes gets confused when passed CDBI::Column objects as field names, 
 # hence all the map {''.$_} column filters. Some of them are probably unnecessary, 
 # but I need to track down which. UPDATE: the dev version now uses map { $_->name }
@@ -32,10 +37,10 @@ use base 'Class::Data::Inheritable';
 #   2. test field names to see if they are (CDBI column) objects, and if so, extract the 
 #       appropriate accessor or mutator name
 
-our $VERSION = '0.43';
-
-# process_extras *must* come 2nd last
-our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );
+# UPDATE: forms should be built with $column->name as the field name, because in general 
+#   form submissions will need to do both get and set operations. So the form handling 
+#   methods should assume forms supply column names, and should look up column mutator/accessor 
+#   as appropriate.
 
 # have a look at http://search.cpan.org/~rsavage/DBIx-Admin-TableInfo-1.02/ instead
 our %ValidMap = ( varchar   => 'VALUE',
@@ -442,7 +447,7 @@ processors have run.
 
 C<Class::DBI::FormBuilder> replaces C<CGI::FormBuilder::render()> with a hookable version of C<render()>.
 The hook is a coderef, supplied in the C<post_process> argument (which can be set in the call to C<as_form>,
-C<search_form>, C<render>, or in C<form_builder_defaults>). The coderef is passed 
+C<search_form>, C<render>, or in C<form_builder_defaults>). The coderef is passed the following arguments:
 
     $class      the CDBI::FormBuilder class or subclass
     $form       the CGI::FormBuilder form object
@@ -586,22 +591,6 @@ and is probably incomplete. If you come across any failures, you can add suitabl
 =head1 Other features
 
 =over 4
-
-=item Pretty printing
-
-If you load the module like so:
-
-    use Class::DBI::FormBuilder PrettyPrint => 'ALL';
-    
-form output will be indented for easier readability. This option requires L<HTML::TreeBuilder>. 
-
-If you say:
-
-    use Class::DBI::FormBuilder PrettyPrint => 1;
-    
-output will only be indented if you ask for it:
-
-    print $form->render( PrettyPrint => 1 );
 
 =item Class::DBI::FromForm
 
@@ -3205,6 +3194,9 @@ sub _get_auto_validate_args
 
 =head1 TODO
 
+Use the proper column accessors (i.e. $column->name for form field names, $column->accessor 
+for 'get', and $column->mutator foe 'set' operations).
+
 Better merging of attributes. For instance, it'd be nice to set some field attributes 
 (e.g. size or type) in C<form_builder_defaults>, and not lose them when the fields list is 
 generated and added to C<%args>. 
@@ -3212,6 +3204,8 @@ generated and added to C<%args>.
 Regex and column type entries for C<process_fields>, analogous to validation settings.
 
 Use preprocessors in form_has_a, form_has_many and form_might_have.
+
+Transaction support - see http://search.cpan.org/~tmtm/Class-DBI-0.96/lib/Class/DBI.pm#TRANSACTIONS
 
 Wrap the call to C<$form_modify> in an eval, and provide a better diagnostic if the call 
 fails because it's trying to handle a relationship that has not yet been coded - e.g. is_a

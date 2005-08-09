@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.431   Tues 9 Aug  2005, 9:55
+        - removed some out of date pod
+
 0.43    Tues 9 Aug  2005, 1:20
         - added as_multiform() method
         - added create_from_multiform() method
