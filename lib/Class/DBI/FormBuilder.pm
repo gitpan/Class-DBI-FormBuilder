@@ -15,7 +15,7 @@ use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3, COLUMN => 4 };
 
 use base 'Class::Data::Inheritable';
 
-our $VERSION = '0.431';
+our $VERSION = '0.432';
 
 # process_extras *must* come 2nd last
 our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );
@@ -360,6 +360,9 @@ Class::DBI::FormBuilder - Class::DBI/CGI::FormBuilder integration
     
 =head1 DESCRIPTION
 
+B<Errata: use of column name/accessor/mutator is currently broken if your column 
+accessors/mutators are different from the column name>. The documentation is also broken w.r.t. this. 
+
 This module creates a L<CGI::FormBuilder|CGI::FormBuilder> form from a CDBI class or object. If 
 from an object, it populates the form fields with the object's values. 
 
@@ -451,7 +454,7 @@ C<search_form>, C<render>, or in C<form_builder_defaults>). The coderef is passe
 
     $class      the CDBI::FormBuilder class or subclass
     $form       the CGI::FormBuilder form object
-    $render     reference to CGI::FormBuilder::render
+    $render     reference to &CGI::FormBuilder::render
     $pp_args    value of the post_process_args argument, or undef
     %args       the arguments used in the CGI::FormBuilder->new call
 
@@ -471,24 +474,24 @@ or for a whole hierarchy by setting the value in the base class.
 
 C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
 load (via C<require>) an appropriate plugin. For instance, for a C<Time::Piece> column, it will attempt 
-to load C<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, 
+to load L<Class::DBI::FormBuilder::Plugin::Time::Piece>. Then it will call the C<field> method in the plugin, 
 passing the CDBI class for whom the form has been constructed, the form, and a L<Class::DBI::Column> object 
 representing the field being processed. The plugin can use this information to modify the form, perhaps 
 adding extra fields, or controlling stringification, or setting up custom validation. Note that the name of 
-the form field should be retrieved from the field object as C<< $field->mutator >>, rather than relying 
-on C< $field > to stringify itself, because it will stringify to C<< lc( $field->name >>.
+the form field should be retrieved from the field object as C<< $field->name >>, rather than relying 
+on C< $field > to stringify itself, because it will stringify to C<< $field->name_lc >>.
 
 If no plugin is found, a fatal exception is thrown. If you have a situation where it would be useful to 
 simply stringify the object instead, let me know and I'll make this configurable.
 
 =head1 Automatic validation setup
 
-If you place a normal L<CGI::FormBuilder|CGI::FormBuilder> validation spec in 
-C<< $class->form_builder_defaults->{validate} >>, that spec will be used to configure validation. 
+If you place a normal L<CGI::FormBuilder|CGI::FormBuilder> validation spec in the C<validate> argument,
+that spec will be used to configure validation. 
 
-If there is no spec in C<< $class->form_builder_defaults->{validate} >>, then validation will 
-be configured automatically. The default configuration is pretty basic, but you can modify it 
-by placing settings in C<< $class->form_builder_defaults->{auto_validate} >>. 
+If there is no spec in the method call or in C<< $class->form_builder_defaults->{validate} >>, then 
+validation will be configured automatically. The default configuration is pretty basic, but you can modify it 
+by placing settings in the C<auto_validate> argument, or in C<< $class->form_builder_defaults->{auto_validate} >>. 
 
 =head2 Basic auto-validation
 
@@ -502,7 +505,8 @@ Any column listed in C<< $class->form_builder_defaults->{options} >> will be set
 
 =head2 Advanced auto-validation
 
-The following settings can be placed in C<< $class->form_builder_defaults->{auto_validate} >>.
+The following settings can be placed in the C<auto_validate> argument (or in 
+C<< $class->form_builder_defaults->{auto_validate} >>).
 
 =over 4
 
@@ -521,8 +525,8 @@ Specify validate types for specific columns:
                   }
                           
 This option takes the same settings as the C<validate> option to C<CGI::FormBuilder::new()> 
-(i.e. the same as would otherwise go in C<< $class->form_builder_defaults->{validate} >>). 
-Settings here override any others. 
+(i.e. the same as would otherwise go in the C<validate> argument or in 
+C<< $class->form_builder_defaults->{validate} >>). Settings here override any others. 
 
 =item skip_columns
 
@@ -543,7 +547,7 @@ Use regular expressions matching groups of columns to specify validation:
 Validate according to SQL data types:
 
     validate_types => { date => \&my_date_checker,
-                       }
+                        }
                        
 Defaults are taken from the package global C<%TypesMap>. 
                         
@@ -578,6 +582,8 @@ acceptable in most cases, as the column type will usually be some kind of intege
 
 The default behaviour is to skip validating C<timestamp> columns. A warning will be issued
 if the C<debug> parameter is set to 2.
+
+Note that C<timestamp> columns are rendered as C<readonly> (see C<form_timestamp>). 
 
 =item Failures
 
@@ -1302,6 +1308,10 @@ it builds a form with fields
     R1__foo
     R1__bar
     R1__baz
+    R2__foo
+    R2__bar
+    R2__baz
+    etc.
     
 Specify the number of duplicates in the C<how_many> required argument.
 
@@ -1925,7 +1935,7 @@ select-type columns for MySQL databases.
 You can handle new relationship types by subclassing, and writing suitable C<form_*> methods (e.g. 
 C<form_many_many)>. Your custom methods will be automatically called on the relevant fields. 
 
-C<has_a> relationships to non-CDBI classes are handled via a plugin mechanism (see below). 
+C<has_a> relationships to non-CDBI classes are handled via a plugin mechanism (see above). 
 
 =over 4
 
@@ -1966,8 +1976,8 @@ checkbox widgets. Currently only works for MySQL C<ENUM> and C<SET> columns.
 Patches are welcome for similar column types in other RDBMS's. 
 
 Note that you can easily emulate a MySQL C<ENUM> column at the application level by setting 
-the validation for the column to an arrayref of values. Haven't poked around yet to see how 
-easily a C<SET> column can be emulated.
+the validation for the column to an arrayref of values. Emulate a C<SET> column by additionally 
+setting the C<multiple> option to C<1>.
 
 =cut
 
@@ -2037,7 +2047,7 @@ This method assumes the primary key is a single column - patches welcome.
 
 Retrieves every row and creates an object for it - not good for large tables.
 
-If the relationship is to a non-CDBI class, loads a plugin to handle the field (see below - Plugins).
+If the relationship is to a non-CDBI class, loads a plugin to handle the field (see 'Plugins').
 
 =cut
 
@@ -2348,8 +2358,26 @@ in the C<process_fields> argument, set the field processor to C<FILE>.
 
 Figures out if a column contains file data. 
 
-This method will probably go away at some point, unless somebody can show me how to automatically 
-detect that a column stores binary data. 
+If somebody can show me how to automatically detect that a column stores binary data, then this method 
+could actually do something useful. 
+
+If you are in the habit of using a naming convention that allows you to identify C<file> columns, then 
+you could subclass L<Class::DBI::FormBuilder> and override this method:
+
+    # use a naming convention to configure file columns
+    sub form_file
+    {
+        my ( $me, $them, $form, $pre_process ) = @_;
+    
+        foreach my $field ( $them->columns( 'All' ) )
+        {
+            next unless $field->name =~ /^file_\w+$/;
+        
+            my $process = $me->_add_processors( $field, $pre_process, 'FILE' ); 
+            
+            $me->_process_field( $them, $form, $field, $process );
+        }
+    }
 
 =cut
 
@@ -2391,6 +2419,8 @@ sub form_process_extras
 After running all previous field processors (including C<form_process_extras>), this gives the 
 chance to run code to modify all fields in the completed form. Use this by setting a field 
 processor in the special C<__FINAL__> slot of C<process_fields>.
+
+And avoid naming any of your normal columns or fields C<__FINAL__>.
 
 =cut
 
@@ -2491,8 +2521,6 @@ sub create_from_multiform
 
     return @new;    
 }
-
-=begin crud
 
 =item update_from_form( $form )
 
@@ -3206,6 +3234,7 @@ Regex and column type entries for C<process_fields>, analogous to validation set
 Use preprocessors in form_has_a, form_has_many and form_might_have.
 
 Transaction support - see http://search.cpan.org/~tmtm/Class-DBI-0.96/lib/Class/DBI.pm#TRANSACTIONS
+and http://wiki.class-dbi.com/index.cgi?AtomicUpdates
 
 Wrap the call to C<$form_modify> in an eval, and provide a better diagnostic if the call 
 fails because it's trying to handle a relationship that has not yet been coded - e.g. is_a

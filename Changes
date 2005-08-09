@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.432   Tues 9 Aug  2005, 9:55
+        - minor pod fixes
+
 0.431   Tues 9 Aug  2005, 9:55
         - removed some out of date pod
 
