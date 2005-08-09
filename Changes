@@ -1,5 +1,14 @@
 Revision history for Class-DBI-FormBuilder
 
+0.43    Tues 9 Aug  2005, 1:20
+        - added as_multiform() method
+        - added create_from_multiform() method
+        
+        - added post_processor architecture (e.g. for pretty-printing)
+        - added PrettyPrint post-processor
+        - added form_final(), which applies field processors in the '__FINAL__' slot 
+            of process_fields
+
 0.421   Wed  3 Aug  2005, 23:55
         - skip annoying tests in 51.related.t
 

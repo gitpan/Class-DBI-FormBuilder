@@ -4,7 +4,7 @@ use warnings;
 use strict;
 use Carp();
 
-use Data::Dumper;
+#use Data::Dumper;
 
 use List::Util();
 use CGI::FormBuilder 3;
@@ -32,10 +32,10 @@ use base 'Class::Data::Inheritable';
 #   2. test field names to see if they are (CDBI column) objects, and if so, extract the 
 #       appropriate accessor or mutator name
 
-our $VERSION = '0.421';
+our $VERSION = '0.43';
 
-# process_extras *must* come last
-our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras );
+# process_extras *must* come 2nd last
+our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );
 
 # have a look at http://search.cpan.org/~rsavage/DBIx-Admin-TableInfo-1.02/ instead
 our %ValidMap = ( varchar   => 'VALUE',
@@ -66,8 +66,10 @@ our %ValidMap = ( varchar   => 'VALUE',
                   );    
                   
 __PACKAGE__->mk_classdata( field_processors => {} );
+__PACKAGE__->mk_classdata( post_processors  => {} );
                   
 {
+    # field_processors
     my $built_ins = { # default in form_pks
                       HIDDEN => [ '+HIDDEN', '+VALUE' ],
                       
@@ -156,31 +158,18 @@ __PACKAGE__->mk_classdata( field_processors => {} );
                       
     __PACKAGE__->field_processors( $built_ins );    
 }
-    
-sub import
-{
-    my ( $class, %args ) = @_;
-    
-    my $caller = caller(0);
-    
-    $caller->can( 'form_builder_defaults' ) || $caller->mk_classdata( 'form_builder_defaults', {} );
-    
-    # replace CGI::FB's render() method with one that accepts a PrettyPrint switch
-    if ( my $pp = $args{PrettyPrint} )
-    {
-        HTML::TreeBuilder->require || die "Couldn't load HTML::TreeBuilder: $@";
-        
-        my $render = \&CGI::FormBuilder::render;
-        
-        my $render_pretty = sub 
-        { 
-            my ( $cgifb, %args ) = @_;
 
-            if ( delete $args{PrettyPrint} or $pp eq 'ALL' )
-            {            
+{
+    # post processors - note that the calling code is responsible for loading prerequisites 
+    #                   of a processor e.g. HTML::Tree
+    my $built_ins = { 
+        PrettyPrint => sub 
+            {
+                my ( $me, $form, $render, undef, %args ) = @_;
+                
                 # the <div></div> is a trick to force HTML::TB to put the 
                 # noscript in the body and not in the head
-                my $html_in = '<div></div>' . $render->( $cgifb, %args );
+                my $html_in = '<div></div>' . $render->( $form, %args );
                 
                 my $tree = HTML::TreeBuilder->new;
                 
@@ -202,15 +191,46 @@ sub import
                 $html_out =~ s'</div>$'';
                 
                 return $html_out;
+            },
+        
+        # Duplicates => sub ... # removed after revision 368
+        };
+        
+    __PACKAGE__->post_processors( $built_ins );    
+}
+    
+sub import
+{
+    my ( $class, %args ) = @_;
+    
+    my $caller = caller(0);
+    
+    $caller->can( 'form_builder_defaults' ) || $caller->mk_classdata( 'form_builder_defaults', {} );
+    
+    # replace CGI::FB's render() method with a hookable version
+    {
+        my $render = \&CGI::FormBuilder::render;
+        
+        my $hookable_render = sub 
+        { 
+            my ( $form, %args ) = @_;
+            
+            if ( my $post_processor = delete( $args{post_process} ) || $form->__cdbi_original_args__->{post_process} )
+            {
+                # the pp can mess with the form, then render it (as in the else clause below), then mess 
+                # with the HTML, before returning the HTML
+                my $pp_args = $form->__cdbi_original_args__->{post_process_args};
+                
+                return $post_processor->( $class, $form, $render, $pp_args, %args );           
             }
             else
             {
-                return $render->( $cgifb, %args );
+                return $render->( $form, %args );
             }
         };
         
         no warnings 'redefine';
-        *CGI::FormBuilder::render = $render_pretty;
+        *CGI::FormBuilder::render = $hookable_render;
     }
     
     # To support subclassing, store the FB (sub)class on the caller, and use that whenever we need
@@ -229,6 +249,9 @@ sub import
                      search_form
                      
                      as_form_with_related
+                     
+                     as_multiform
+                     create_from_multiform
                      
                      update_or_create_from_form
                      
@@ -411,6 +434,34 @@ Applies each processor in order.
 
 =back
 
+The key C<__FINAL__> is reserved for C<form_final>, so don't name any form fields C<__FINAL__>. If a 
+field processor is set in C<__FINAL__>, then it will be applied to all fields, after all other 
+processors have run. 
+
+=head1 Customising C<render> output
+
+C<Class::DBI::FormBuilder> replaces C<CGI::FormBuilder::render()> with a hookable version of C<render()>.
+The hook is a coderef, supplied in the C<post_process> argument (which can be set in the call to C<as_form>,
+C<search_form>, C<render>, or in C<form_builder_defaults>). The coderef is passed 
+
+    $class      the CDBI::FormBuilder class or subclass
+    $form       the CGI::FormBuilder form object
+    $render     reference to CGI::FormBuilder::render
+    $pp_args    value of the post_process_args argument, or undef
+    %args       the arguments used in the CGI::FormBuilder->new call
+
+The coderef should return HTML markup for the form, probably by calling C<< $render->( $form, %args ) >>. 
+
+A pretty-printer coderef is available in the hashref of built-in post-processors: 
+
+    my $pretty = Class::DBI::FormBuilder->post_processors->{PrettyPrint};
+    
+So you can turn on pretty printing for a class by setting:
+
+    My::Class->form_builder_defaults->{post_process} = Class::DBI::FormBuilder->post_processors->{PrettyPrint};
+    
+or for a whole hierarchy by setting the value in the base class. 
+    
 =head1 Plugins
 
 C<has_a> relationships can refer to non-CDBI classes. In this case, C<form_has_a> will attempt to 
@@ -711,7 +762,16 @@ sub _track_down
                    };
          
         return $p;
-    }        
+    }       
+    
+#    # +FIELD_PREFIX($prefix)
+#    if ( $processor =~ /^\+FIELD_PREFIX(\s*(.*)\s*\)$/ )
+#    {
+#        my $prefix = $1;
+#        
+#        $p = sub { $_[FORM]->field( name => $_[FIELD],
+#    
+#    }
     
     die "Unexpected ref: $processor (expected class name)" if ref $processor;
     
@@ -738,6 +798,9 @@ sub _add_processors
     
     #warn sprintf "Combining procs %s and %s\n", $auto || '', $custom || '';
     
+    # I'd use xor if I had a one-liner that doesn't use the temp var
+    #my $only = $custom xor $auto;
+    #return $only if $only; 
     return $custom unless $auto;
     return $auto   unless $custom;
     
@@ -1206,6 +1269,122 @@ sub as_form
     return scalar $me->_as_form( $them, %args_in );    
 }
 
+=begin notes
+
+There seem to be several ways to approach this:
+
+1. Modify the original args, so that CGI::FB builds a single form with multiple sets of inputs. 
+    This seems difficult, but would result in a form that could be processed very easily.
+    
+2. Build multiple forms, and use a custom javascript submit button to gather all their inputs and 
+    submit a single form. The js is tricky, and processing the input is not easy, because we don't 
+    have a server form to handle it.
+    
+3. Use HTML::Tree to build a super-form from a standard form. Same problem with processing input as 
+    for #2.
+    
+4. AJAX - instead of submitting all forms in one go (as in #2), submit each form individually. This 
+    would solve the problem of processing the submission, but requires a different architecture.  
+
+Seems to boil down to #1 or #3. 
+
+The problem with #1 is that after building the CGI::FB form, it is then passed through all the form 
+modifiers, including any registered field processors. All of this would have to cope with modifying 
+field names. But maybe that could be done via a final field modifier?
+
+The problem with #3 is processing submissions, since the final form is never represented by a CGI::FB
+form. 
+    
+=end notes
+
+=cut
+
+=item as_multiform
+
+This method supports adding multiple related items to an object in a related class. Call this method 
+on the class at the 'many' end of a C<has_many> relationship. Instead of building a form with fields 
+
+    foo 
+    bar
+    baz
+    
+it builds a form with fields
+
+    R1__foo
+    R1__bar
+    R1__baz
+    
+Specify the number of duplicates in the C<how_many> required argument.
+
+Use C<create_from_multiform> to process a form submission.
+    
+See C<Maypole::FormBuilder::Model::addmany()> and the C<addmany> template for an example usage. 
+
+=cut
+
+sub as_multiform
+{
+    my ( $them, %args_in ) = @_;
+    
+    my $me = $them->__form_builder_subclass__;
+    
+    my $how_many = delete $args_in{how_many} || die 'need to know how many to build';
+    
+    my @forms;
+    
+    foreach my $fnum ( 1..$how_many )
+    {
+        my $prefix = "R$fnum\__";
+        my $form = $them->as_form( %args_in );
+        
+        foreach my $field ( $form->fields )
+        {
+            # get the label before it changes
+            my $label = $field->label;
+            my $name  = $field->name;
+            $field->name( "$prefix${name}" );
+            # put the label back
+            $field->label( $label );
+        }
+        
+        push @forms, $form;
+    }
+     
+    return $me->_merge_forms( @forms );   
+}
+
+sub _merge_forms
+{
+    my ( $me, @forms ) = @_;
+    
+    my $form = shift @forms;
+    
+    my @original_fields = $form->fields;
+    
+    my @extra_fields;
+    
+    foreach my $additional_form ( @forms )
+    {
+        foreach my $field ( $additional_form->fields )
+        {
+            my $field_name = $field->name; 
+            
+            $field->_form( $form );
+            
+            #my $original_field = shift @original_fields;
+            #$field->label( $original_field->label );
+            
+            $form->{fieldrefs}{ $field_name } = $field;
+        
+            push @extra_fields, $field;
+        }
+        
+        push @{ $form->{fields} }, @extra_fields;
+    }
+
+    return $form;
+}
+        
 sub _as_form
 {
     my ( $me, $them, %args_in ) = @_;
@@ -1333,8 +1512,8 @@ sub _get_args
     
     #@{ $args_in{fields} } = map { ''.$_ } @{ $args_in{fields} } if $args_in{fields};
     
-    # NOTE: this still means any custom processors for a given field, will replace all default 
-    #           processors for that field, but at least we can mix some fileds having default 
+    # NOTE: this merging still means any custom processors for a given field, will replace all default 
+    #           processors for that field, but at least we can mix some fields having default 
     #           processors, and others having custom ones.
     my $pre_process1 = $them->form_builder_defaults->{process_fields} || {};
     my $pre_process2 = delete( $args_in{process_fields} ) || {};
@@ -1370,8 +1549,17 @@ sub _get_args
         $args{values} ||= \@values;
     }
     
-    # take care that anything in here is copied, not a reference
-    my $orig = { fields => $original_fields };
+    my %post_process = ( 
+        post_process      => delete( $args_in{post_process} )      || $them->form_builder_defaults->{post_process},
+        post_process_args => delete( $args_in{post_process_args} ) || $them->form_builder_defaults->{post_process_args},
+                         );
+                         
+    %post_process = () unless $post_process{post_process};
+    
+    # store a few CDBI::FB arguments that may be needed later
+    my $orig = { fields => $original_fields,
+                 %post_process,
+                 };
     
     return $orig, %args;
 }
@@ -1571,7 +1759,7 @@ sub _splice_form
     }
     
 }
-        
+
 # Return the class or object(s) associated with a field, if anything is associated. 
 sub _related
 {
@@ -2199,12 +2387,31 @@ sub form_process_extras
     {
         next if exists $form->field->{ $field }; 
         
+        next if $field eq '__FINAL__'; # reserved for form_final
+        
         #my $process = $pre_process->{ $field };
         # this is just to help with debugging _add_processors
         my $process = $me->_add_processors( $field, $pre_process, [ ] );
         
         $me->_process_field( $them, $form, $field, $process );
     }    
+}
+
+=item form_final
+
+After running all previous field processors (including C<form_process_extras>), this gives the 
+chance to run code to modify all fields in the completed form. Use this by setting a field 
+processor in the special C<__FINAL__> slot of C<process_fields>.
+
+=cut
+
+sub form_final
+{
+    my ( $me, $them, $form, $pre_process ) = @_;
+    
+    my $final = $pre_process->{__FINAL__} or return;
+    
+    $me->_process_field( $them, $form, $_, $final ) for $form->fields;
 }
 
 =back
@@ -2256,6 +2463,44 @@ sub _fb_create_data
     }
 
     return $cols;
+}
+
+=item create_from_multiform
+
+Creates multiple new objects from a C<as_multiform> form submission.
+
+=cut
+
+sub create_from_multiform
+{
+    my ( $them, $form ) = @_;
+    
+    Carp::croak "create_from_multiform can only be called as a class method" if ref $them;
+    
+    return unless $form->submitted && $form->validate;
+
+    warn 'misses multiple items';
+    my $form_data = $form->field; 
+    
+    warn 'Form data: ' . Dumper( $form_data );
+    
+    my $items_data;
+    
+    foreach my $fname ( keys %$form_data )
+    {
+        $fname =~ /^R(\d+)__(\w+)$/;
+        
+        my $item_num = $1;
+        my $col_name = $2;
+        
+        $items_data->{ $item_num }->{ $col_name } = $form_data->{ $fname };
+    }
+    
+    warn 'Data for create: ' . Dumper( $items_data );
+    
+    my @new = map { $them->create( $_ ) } values %$items_data;
+
+    return @new;    
 }
 
 =begin crud
