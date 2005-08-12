@@ -1,5 +1,15 @@
 Revision history for Class-DBI-FormBuilder
 
+0.44    Sat 13 Aug 2005, 00:35
+        - added NoTextAreas post-processor
+        - accepts the name of a built-in post-processor in the 'post_process' argument, 
+            as well as a coderef
+        - the +VALUE processor sets the value to the default for the column from the database, 
+            if there is no value in the column and the column is NOT NULL
+            
+        - added db_order_columns() as a public method
+            
+
 0.432   Tues 9 Aug  2005, 9:55
         - minor pod fixes
 

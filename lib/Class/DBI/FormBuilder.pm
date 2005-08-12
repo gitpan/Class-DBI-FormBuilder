@@ -4,8 +4,6 @@ use warnings;
 use strict;
 use Carp();
 
-#use Data::Dumper;
-
 use List::Util();
 use CGI::FormBuilder 3;
 
@@ -15,7 +13,7 @@ use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3, COLUMN => 4 };
 
 use base 'Class::Data::Inheritable';
 
-our $VERSION = '0.432';
+our $VERSION = '0.44';
 
 # process_extras *must* come 2nd last
 our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );
@@ -98,7 +96,19 @@ __PACKAGE__->mk_classdata( post_processors  => {} );
                                         $_[THEM], $_[COLUMN]->accessor, defined $value ? $value : 'undef';
                                 }
                                 
-                                $value = ''.$value if defined( $value );  # CGI::FB chokes on objects
+                                $value = ''.$value if defined $value;  # CGI::FB chokes on objects
+                                
+                                if ( ! defined $value )
+                                {
+                                    # if the column can be NULL, and the value is undef, we have no way of 
+                                    # knowing whether the value has never been set, or has been set to NULL
+                                    if ( ! $_[ME]->column_meta( $_[THEM], $_[FIELD], 'nullable' ) )
+                                    {
+                                        # but if the column can not be NULL, and the value is undef, 
+                                        # set it to the default for the column
+                                        $value = $_[ME]->column_meta( $_[THEM], $_[FIELD], 'default' );
+                                    }
+                                }
                                 
                                 $_[FORM]->field( name  => $_[FIELD],
                                                  value => $value,   
@@ -139,7 +149,7 @@ __PACKAGE__->mk_classdata( post_processors  => {} );
                       {    
                           my ( $series, $multiple ) = 
                               $_[ME]->_get_col_options_for_enumlike( $_[THEM], $_[FIELD] );
-                        
+                              
                           return unless @$series;
                         
                           $_[FORM]->field( name      => $_[FIELD],
@@ -199,6 +209,19 @@ __PACKAGE__->mk_classdata( post_processors  => {} );
             },
         
         # Duplicates => sub ... # removed after revision 368
+        
+        NoTextAreas => sub 
+            {
+                my ( $me, $form, $render, undef, %args ) = @_;
+            
+                foreach my $field ( $form->field )
+                {
+                    $field->type( 'text' ) if $field->type eq 'textarea';
+                }   
+                
+                return $render->( $form, %args );
+            },
+        
         };
         
     __PACKAGE__->post_processors( $built_ins );    
@@ -226,7 +249,9 @@ sub import
                 # with the HTML, before returning the HTML
                 my $pp_args = $form->__cdbi_original_args__->{post_process_args};
                 
-                return $post_processor->( $class, $form, $render, $pp_args, %args );           
+                my $pp = ref( $post_processor ) eq 'CODE' ? $post_processor : $class->post_processors->{ $post_processor };
+                
+                return $pp->( $class, $form, $render, $pp_args, %args );           
             }
             else
             {
@@ -449,8 +474,9 @@ processors have run.
 =head1 Customising C<render> output
 
 C<Class::DBI::FormBuilder> replaces C<CGI::FormBuilder::render()> with a hookable version of C<render()>.
-The hook is a coderef, supplied in the C<post_process> argument (which can be set in the call to C<as_form>,
-C<search_form>, C<render>, or in C<form_builder_defaults>). The coderef is passed the following arguments:
+The hook is a coderef, or the name of a built-in, supplied in the C<post_process> argument (which can 
+be set in the call to C<as_form>, C<search_form>, C<render>, or in C<form_builder_defaults>). The coderef 
+is passed the following arguments:
 
     $class      the CDBI::FormBuilder class or subclass
     $form       the CGI::FormBuilder form object
@@ -459,6 +485,10 @@ C<search_form>, C<render>, or in C<form_builder_defaults>). The coderef is passe
     %args       the arguments used in the CGI::FormBuilder->new call
 
 The coderef should return HTML markup for the form, probably by calling C<< $render->( $form, %args ) >>. 
+
+=over 4
+
+=item PrettyPrint
 
 A pretty-printer coderef is available in the hashref of built-in post-processors: 
 
@@ -469,6 +499,17 @@ So you can turn on pretty printing for a class by setting:
     My::Class->form_builder_defaults->{post_process} = Class::DBI::FormBuilder->post_processors->{PrettyPrint};
     
 or for a whole hierarchy by setting the value in the base class. 
+
+=item NoTextAreas
+
+This post-processor ensures that any fields configured as C<textarea>s are converted to a plain C<text> 
+field before rendering. 
+
+This might have been used for instance in the L<Maypole::FormBuilder> editable 
+C<list> template, to ensure each form in the table fits neatly into a single row. Except that method is 
+an ugly hack that doesn't support post-processors.
+
+=back
     
 =head1 Plugins
 
@@ -674,7 +715,7 @@ sub _process_field
 {
     my ( $me, $them, $form, $field, $process ) = @_;
     
-    # $field will normally be a CDBI column object
+    # $field will normally be a CDBI column object, but can be a string
     my $field_name = ref $field ? $field->mutator : $field;
     
     # some processors (e.g. +VALUE) need access to accessor name, not mutator name
@@ -1159,9 +1200,21 @@ $VAR1 = { catalogue schema   table            column           meta
 
 =cut
 
+=item db_order_columns( $them, $group )
+
+This method is not exported to the CDBI class.
+
+Returns the columns in the specified column group (defaults to 'All') in the order they appear in the database.
+
+=cut
+
+*db_order_columns = \&_db_order_columns;
+
 sub _db_order_columns 
 {
     my ( $me, $them, $group ) = @_;
+    
+    die "Need a CDBI class or object (got: $them)" unless UNIVERSAL::isa( $them, 'Class::DBI' );
     
     $group ||= 'All';
 
@@ -1171,9 +1224,7 @@ sub _db_order_columns
     
     my %c_o = map { $_ => shift( @columns ) } @orders;
     
-    #warn "Column order for group $group: " . Dumper( \%c_o );
-    
-    my @ordered = map { $c_o{ $_ } } sort keys %c_o;
+    my @ordered = map { $c_o{ $_ } } sort { $a <=> $b } keys %c_o;
     
     return @ordered;
 } 
@@ -1289,6 +1340,12 @@ field names. But maybe that could be done via a final field modifier?
 
 The problem with #3 is processing submissions, since the final form is never represented by a CGI::FB
 form. 
+
+UPDATE: the solution is:
+
+5. Build the individual forms, tweak their field names, then combine all the fields
+    from all the forms into a single form. This works because most of the CGI::FB magic 
+    does not happen during form construction, but during calls made on the completed form.
     
 =end notes
 
@@ -1317,7 +1374,7 @@ Specify the number of duplicates in the C<how_many> required argument.
 
 Use C<create_from_multiform> to process a form submission.
     
-See C<Maypole::FormBuilder::Model::addmany()> and the C<addmany> template for an example usage. 
+See C<Maypole::FormBuilder::Model::addmany()> and the C<addmany> template for example usage. 
 
 =cut
 
@@ -1336,7 +1393,9 @@ sub as_multiform
         my $prefix = "R$fnum\__";
         my $form = $them->as_form( %args_in );
         
-        foreach my $field ( $form->fields )
+        my @fields = $form->fields;
+        
+        foreach my $field ( @fields )
         {
             # get the label before it changes
             my $label = $field->label;
@@ -1345,6 +1404,9 @@ sub as_multiform
             # put the label back
             $field->label( $label );
         }
+        
+        # put a bit of space after the last field
+        $fields[-1]->comment( '<br />&nbsp;' );
         
         push @forms, $form;
     }
@@ -1358,27 +1420,16 @@ sub _merge_forms
     
     my $form = shift @forms;
     
-    my @original_fields = $form->fields;
-    
-    my @extra_fields;
-    
     foreach my $additional_form ( @forms )
     {
         foreach my $field ( $additional_form->fields )
         {
-            my $field_name = $field->name; 
-            
             $field->_form( $form );
             
-            #my $original_field = shift @original_fields;
-            #$field->label( $original_field->label );
-            
-            $form->{fieldrefs}{ $field_name } = $field;
+            $form->{fieldrefs}{ $field->name } = $field;
         
-            push @extra_fields, $field;
+            push @{ $form->{fields} }, $field;
         }
-        
-        push @{ $form->{fields} }, @extra_fields;
     }
 
     return $form;
@@ -2430,7 +2481,7 @@ sub form_final
     
     my $final = $pre_process->{__FINAL__} or return;
     
-    $me->_process_field( $them, $form, $_, $final ) for $form->fields;
+    $me->_process_field( $them, $form, $_, $final ) for map { $_->name } $form->fields;
 }
 
 =back
@@ -2498,10 +2549,7 @@ sub create_from_multiform
     
     return unless $form->submitted && $form->validate;
 
-    warn 'misses multiple items';
     my $form_data = $form->field; 
-    
-    warn 'Form data: ' . Dumper( $form_data );
     
     my $items_data;
     
@@ -2514,8 +2562,6 @@ sub create_from_multiform
         
         $items_data->{ $item_num }->{ $col_name } = $form_data->{ $fname };
     }
-    
-    warn 'Data for create: ' . Dumper( $items_data );
     
     my @new = map { $them->create( $_ ) } values %$items_data;
 
