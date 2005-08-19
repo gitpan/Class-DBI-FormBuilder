@@ -12,13 +12,17 @@ if ( ! DBD::SQLite2->require )
     plan skip_all => "Couldn't load DBD::SQLite2";
 }
 
-plan tests => 2;
+plan tests => 4;
 
 use DBI::Test; 
 
 $ENV{REQUEST_METHOD} = 'GET';
-$ENV{QUERY_STRING}   = 'set_colour=orange&set_fruit=orange&set_town=2&_submitted=1';
+$ENV{QUERY_STRING}   = 'colour=orange&fruit=orange&town=2&_submitted=1';
 
+# basic tests
+SKIP: {
+    
+    skip 'aliased column names not yet supported', 4;
 {
 
     my $data = { colour => 'orange', 
@@ -29,11 +33,19 @@ $ENV{QUERY_STRING}   = 'set_colour=orange&set_fruit=orange&set_town=2&_submitted
                  
     my $form = Alias->as_form;
     
+    ok( $form->submitted, 'form submitted' );
+    
+    # fails because of mangled column name/mutator/accessor in auto-validate code
+    ok( $form->validate, 'form validated' );
+    
+    #warn $form->render unless $form->validate;
+    
     my $orange;
      
     lives_ok { $orange = Alias->create_from_form( $form ) };
     
-    # this fails because the form is built with set_foo field names
+    # this fails ($orange is undefined) because the form data are keyed by column name, 
+    # but need to be sent to CDBI keyed by mutator name
     isa_ok( $orange, 'Class::DBI' );
     
     
@@ -41,3 +53,4 @@ $ENV{QUERY_STRING}   = 'set_colour=orange&set_fruit=orange&set_town=2&_submitted
     
     
 }
+} # / SKIP

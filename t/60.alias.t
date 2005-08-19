@@ -32,7 +32,7 @@ use DBI::Test;
     
     # an extra pk field is getting added
     # ref: the test in 05.update_or_create.t confirms only 1 field is expected
-    my @matches = $html =~ /(name="set_id")/g;
+    my @matches = $html =~ /(name="id")/g;
     is( scalar( @matches ), 1 );
 
     #warn $html;

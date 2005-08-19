@@ -1,5 +1,17 @@
 Revision history for Class-DBI-FormBuilder
 
+0.45    Fri 19 August, 2005 15:50
+        - re-factored metadata methods into 2 new classes: CDBI::FB::Meta::Table and
+            CDBI::FB::Meta::Column 
+        - deprecated column_meta(), column_type() and db_order_columns(), they'll be deleted soon
+        
+        - bug fix - order_by field in search_form() includes the cmp field and the order_by field 
+            itself as possible sort criteria - patch from Dave Howorth
+            
+        - added 'columns' alias to 'validate' entry in auto-validation spec
+        
+        - added __SKIP_PROCESS_EXTRAS__ flag, checked in form_process_extras() 
+
 0.44    Sat 13 Aug 2005, 00:35
         - added NoTextAreas post-processor
         - accepts the name of a built-in post-processor in the 'post_process' argument, 

@@ -2,6 +2,8 @@ Build.PL
 Changes
 DBI/Test.pm
 lib/Class/DBI/FormBuilder.pm
+lib/Class/DBI/FormBuilder/Meta/Table.pm
+lib/Class/DBI/FormBuilder/Meta/Column.pm
 Makefile.PL
 MANIFEST
 META.yml			# Will be created by "make dist"
