@@ -14,9 +14,9 @@ use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3, COLUMN => 4 };
 
 use base 'Class::Data::Inheritable';
 
-our $VERSION = '0.45';
+our $VERSION = '0.451';
 
-# process_extras *must* come 2nd last
+# process_extras *must* come 2nd last 
 our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );
 
 # C::FB sometimes gets confused when passed CDBI::Column objects as field names, 
@@ -1327,6 +1327,11 @@ sub search_form
         $field->required( 0 ) unless $force_required{ $field };
         
         $field->type( 'text' ) if $field->type eq 'textarea';
+        
+        # some default field processors may set a value, which needs to be 
+        # removed on the search form
+        #$field->value( undef ); # this requires CGI::FB 3.03
+        $form->field( name => $field->name, value => undef );
     }   
     
     # ----- customise the search -----
@@ -1456,9 +1461,12 @@ sub _get_args
                          
     %post_process = () unless $post_process{post_process};
     
+    my $process_extras = delete( $args_in{process_extras} ) || [];
+    
     # store a few CDBI::FB arguments that may be needed later
     my $orig = { fields => $original_fields,
                  %post_process,
+                 process_extras => $process_extras,
                  };
     
     return $orig, %args;
@@ -2210,13 +2218,19 @@ sub form_process_extras
     # this is a flag used in Maypole::FormBuilder::Model::setup_form_mode() button modes to 
     # prevent extra fields that may be mentioned in form_builder_defaults->{process_fields} 
     # from being added to the form
-    return if $pre_process->{__SKIP_PROCESS_EXTRAS__};
+    #return if $pre_process->{__SKIP_PROCESS_EXTRAS__};
+    
+    my %process_extras = map { $_ => 1 } @{ $form->__cdbi_original_args__->{process_extras} };
+    
+    return unless %process_extras;
     
     foreach my $field ( keys %$pre_process )
     {
         next if exists $form->field->{ $field }; 
         
-        next if $field eq '__FINAL__'; # reserved for form_final
+        #next if $field eq '__FINAL__'; # reserved for form_final
+        
+        next unless $process_extras{ $field };
         
         #my $process = $pre_process->{ $field };
         # this is just to help with debugging _add_processors

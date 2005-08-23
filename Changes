@@ -1,5 +1,16 @@
 Revision history for Class-DBI-FormBuilder
 
+0.451   Tues 23 August, 2005 12:00
+        - form_process_extras now only operates on fields listed in the new process_extras 
+            argument. This will become a hashref soon, the same as process_fields, containing 
+            field processors. 
+            
+        - As a consequence, the __SKIP_PROCESS_EXTRAS__ flag has gone away. 
+            
+        - some field processors set in form_builder_defaults can set values into the form, which 
+            is bad for a search_form, so search_form now clears them out - currently in a slightly 
+            expensive way, revisit this when CGI::FB 3.03 is released
+
 0.45    Fri 19 August, 2005 15:50
         - re-factored metadata methods into 2 new classes: CDBI::FB::Meta::Table and
             CDBI::FB::Meta::Column 
