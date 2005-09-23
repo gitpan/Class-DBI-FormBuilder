@@ -113,6 +113,13 @@ sub type
 
 =item options
 
+Returns the possible values for an enumerated column, and whether the 
+column can store multiple value.
+
+Currently only implemented for MySQL C<enum> (multiple is false) and 
+C<set> (multiple is true) column types, but should be easy to support 
+other databases that offer similar column types.
+
 =cut
 
 sub options

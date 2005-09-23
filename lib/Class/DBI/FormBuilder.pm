@@ -14,7 +14,7 @@ use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3, COLUMN => 4 };
 
 use base 'Class::Data::Inheritable';
 
-our $VERSION = '0.451';
+our $VERSION = '0.46';
 
 # process_extras *must* come 2nd last 
 our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );
@@ -2098,13 +2098,13 @@ sub _field_options
     
     return unless $related_class->isa( 'Class::DBI' );
     
-    my $iter = $related_class->retrieve_all;
+    my $iter = $related_class->retrieve_all;            # potentially expensive
     
     my $pk = $related_class->primary_column;
     
     my @options;
     
-    while ( my $object = $iter->next )
+    while ( my $object = $iter->next )                  # potentially very expensive
     {
         push @options, [ $object->$pk, ''.$object ]; 
     }
@@ -2291,7 +2291,11 @@ sub create_from_form
     
     my $me = $them->__form_builder_subclass__;
     
-    return $them->create( $me->_fb_create_data( $them, $form ) );
+    my $created = $them->create( $me->_fb_create_data( $them, $form ) );
+    
+    $me->_update_many_to_many( $created, $form );
+    
+    return $created;
 }
 
 sub _fb_create_data
@@ -2318,6 +2322,7 @@ Creates multiple new objects from a C<as_multiform> form submission.
 
 =cut
 
+# TODO: check if we need to call _update_many_many
 sub create_from_multiform
 {
     my ( $them, $form ) = @_;
@@ -2359,13 +2364,19 @@ If called on a class, will first retrieve the relevant object (via C<retrieve_fr
 
 sub update_from_form 
 {
-    my $proto = shift;
+    my ( $proto, $form ) = @_;
     
-    my $them = ref( $proto ) ? $proto : $proto->retrieve_from_form( @_ );
+    my $them = ref( $proto ) ? $proto : $proto->retrieve_from_form( $form );
     
     Carp::croak "No object found matching submitted primary key data" unless $them;
     
-    $proto->__form_builder_subclass__->_run_update( $them, @_ );
+    my $me = $proto->__form_builder_subclass__;
+    
+    $me->_run_update( $them, $form );
+    
+    $me->_update_many_to_many( $them, $form );
+    
+    return $them;
 }
 
 sub _run_update 
@@ -2397,6 +2408,63 @@ sub _run_update
     
     return $them;
 }
+
+
+# from Ron McClain:
+sub _update_many_to_many 
+{
+    my ( $me, $obj, $form ) = @_;
+    
+    my $has_many = $obj->meta_info('has_many') || return;
+    
+    foreach my $field ( keys %{ $form->fields } ) 
+    {
+        next unless $has_many->{$field};
+        
+        # many-many
+        next unless $has_many->{$field}->{args}->{mapping};       
+        
+        my $mkey   = $has_many->{$field}->{args}->{mapping}->[0];
+        my $fkey   = $has_many->{$field}->{args}->{foreign_key};
+        my $fclass = $has_many->{$field}->{foreign_class};
+        
+        my %rel_exists;
+        
+        foreach my $rel ( $fclass->search( $fkey => $obj->id ) ) 
+        {
+            if ( grep { $rel->$mkey->id == $_ } $form->field($field) )
+            {
+                $rel_exists{ $rel->$mkey->id }++;
+            } 
+            else 
+            {
+                $rel->delete;
+            }
+        }
+        
+        foreach my $val ( $form->field($field) ) 
+        {
+            $fclass->create( { $fkey => $obj->id, 
+                               $mkey => $val,
+                               } ) 
+                unless $rel_exists{$val};
+        }
+    }
+}
+
+# Also, this patch only applies to many-many.  Not one-many.  I got to
+# thinking about it, and it doesn't make sense to me  have a select list
+# for one-many with existing records..  Because if you edit a record and
+# select a record to relate to it..  The related record may already be
+# associated with a separate record, and it would kill that association..
+# Not intuitive.  But for many-many, I don't see the downside of having
+# something like this be standard.  The only thing I can think of is, what
+# if the glue table has additional columns besides the two foreign keys?
+# I can't think of an example right now, but I guess it's possible.  The
+# other thing I don't quite understand is why
+# meta_info->field->args->mapping is an array and not a scalar.  I just
+# pull off the first element, but I don't know whether it's possible that
+# there be more elements than that, and what they mean.
 
 =item update_or_create_from_form
 
@@ -2698,7 +2766,7 @@ sub _setup_auto_validation
     # and to be preferred
     if ( exists $args{validate} and exists $args{columns} )
     {
-        die "Automatic validation profile contains both 'validate' and 'columns' entries. " . 
+        Carp::croak "Automatic validation profile contains both 'validate' and 'columns' entries. " . 
                 "Use one or other, not both (they're aliases)";
     }
     
@@ -2711,7 +2779,7 @@ sub _setup_auto_validation
     # anything left over is an error
     if ( my @unknown = keys %args )
     {
-        die "Unknown keys in auto-validation spec: " . join( ', ', @unknown );
+        Carp::croak "Unknown keys in auto-validation spec: " . join( ', ', @unknown );
     }
     
     my %skip = map { $_ => 1 } @$skip_cols;
@@ -2744,20 +2812,25 @@ sub _setup_auto_validation
             $o = [ map { ref $_ eq 'ARRAY' ? $_->[0] : $_ } @$o ];
         }
         
-        unless ( $o )
+        unless ($o)
         {
-            my ( $series, undef ) = $me->table_meta( $them )->column( $col_name )->options;
+            # if $fb_args has entries for has_many fields, this will croak
+            my $column_meta = $me->table_meta( $them )->column( $col_name );
+            
+            last unless $column_meta; # it's a has_many (or similar) field
+            
+            my ( $series, undef ) = $column_meta->options;
             $o = $series; 
             warn "(Probably) setting validation to options (@$o) for $col_name in $them" 
                 if ( $debug > 1 and @$o );
-            undef( $o ) unless @$o;            
+            undef($o) unless @$o;            
         }
         
-        my $type = $me->table_meta( $them )->column_deep_type( $col_name );
+        my $type = $me->table_meta($them)->column_deep_type($col_name);
         
         die "No type for $col_name in $them" unless $type;
         
-        my $v = $o || $v_types->{ $type }; 
+        my $v = $o || $v_types->{$type}; 
                  
         foreach my $regex ( keys %$match_types )
         {
@@ -2832,6 +2905,9 @@ sub _get_auto_validate_args
 # ---------------------------------------------------------------------------------- / validation -----
 
 =head1 TODO
+
+has_many fields are not currently being validated (the code to set up the validation config 
+was choking on has_many columns, so for now, they're ignored).
 
 Use the proper column accessors (i.e. $column->name for form field names, $column->accessor 
 for 'get', and $column->mutator foe 'set' operations).

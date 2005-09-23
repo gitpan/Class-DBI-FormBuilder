@@ -244,11 +244,16 @@ sub related_class_and_rel_type
     return ( $related_class, $rel_type );    
 }
 
-=item column
+=item column( $col_name )
+
+If C<$col_name> is a column in this class, returns a L<Class::DBI::FormBuilder::Meta::Column> 
+object for that column. 
+
+If C<$col_name> is a C<has_many> accessor, 
 
 =cut
 
-# returns a CDBI::FB::Meta::Column object or undef
+# returns a CDBI::FB::Meta::Column object or undef - e.g. if asked for a has_many field
 sub column
 {
     my ( $self, $col_name ) = @_;
@@ -258,6 +263,15 @@ sub column
     Carp::croak "meta not loaded" unless $h;
     
     return $h->{ $col_name };
+    
+#    # no such column in this class - maybe it's a has_many field
+#    my ( $fclass, undef ) = $self->related_class_and_rel_type( $col_name );
+#    
+#    Carp::croak sprintf( "Can't find column '%s' in this class (%s), not via related_class_and_rel_type",
+#        $col_name, $self->cdbi_class ) unless $fclass;
+#        
+#    # examine the table meta for $fclass
+#    return $self->instance( $fclass )->column( $col_name );        
 }
 
 =item columns

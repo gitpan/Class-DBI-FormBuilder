@@ -1,5 +1,10 @@
 Revision history for Class-DBI-FormBuilder
 
+0.46    Fri  23 Sept, 2005 22:55
+        - added _update_many_to_many() (Ron McClain). 
+        - don't set up validation on has_many fields. This needs to be addressed, 
+            but the current code was choking on has_many fields
+
 0.451   Tues 23 August, 2005 12:00
         - form_process_extras now only operates on fields listed in the new process_extras 
             argument. This will become a hashref soon, the same as process_fields, containing 
