@@ -1,5 +1,14 @@
 Revision history for Class-DBI-FormBuilder
 
+
+0.47    Mon  26 Sept, 2005 10:40
+        - new 'options_sorters' argument - a hashref, keyed by field name, with values 
+            being coderefs used to sort the options lists in has_a, has_many, and might_have 
+            fields
+        - pass the CDBI-FB class as an extra argument to has_a plugins
+        - timestamp processor defaults to READONLY instead of DISABLED
+        
+
 0.46    Fri  23 Sept, 2005 22:55
         - added _update_many_to_many() (Ron McClain). 
         - don't set up validation on has_many fields. This needs to be addressed, 

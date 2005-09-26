@@ -5,7 +5,7 @@ WriteMakefile
           'NAME' => 'Class::DBI::FormBuilder',
           'VERSION_FROM' => 'lib/Class/DBI/FormBuilder.pm',
           'PREREQ_PM' => {
-                           'CGI::FormBuilder' => '0',
+                           'CGI::FormBuilder' => '3',
                            'Class::DBI' => '0',
                            'Class::Data::Inheritable' => '0',
                            'List::Util' => '0',

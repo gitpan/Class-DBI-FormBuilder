@@ -14,7 +14,7 @@ use constant { ME => 0, THEM => 1, FORM => 2, FIELD => 3, COLUMN => 4 };
 
 use base 'Class::Data::Inheritable';
 
-our $VERSION = '0.46';
+our $VERSION = '0.47';
 
 # process_extras *must* come 2nd last 
 our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );
@@ -115,7 +115,7 @@ __PACKAGE__->mk_classdata( post_processors  => {} );
                                                  );
                       },
                             
-                      TIMESTAMP => 'DISABLED',
+                      TIMESTAMP => 'READONLY',
                       
                       DISABLED => [ '+DISABLED', '+VALUE' ],
                       
@@ -1083,7 +1083,7 @@ sub _related
 
 =item form_builder_defaults( %args )
 
-Stores default arguments for the call to C<CGI::FormBuilder::new()>.
+Stores default arguments.  
 
 =item as_form( %args )
 
@@ -1091,8 +1091,32 @@ Builds a L<CGI::FormBuilder|CGI::FormBuilder> form representing the class or obj
 
 Takes default arguments from C<form_builder_defaults>. 
 
-The optional hash of arguments is the same as for C<CGI::FormBuilder::new()>, and will 
-override any keys in C<form_builder_defaults>. 
+The optional hash of arguments is the same as for C<CGI::FormBuilder::new()>, with a few extras, 
+and will override any keys in C<form_builder_defaults>. 
+
+The extra keys are documented in various places in this file - I'll gather them together here 
+over time. Extra keys include:
+
+=over 4
+
+=item options_sorters
+
+A hashref, keyed by field name, with values being coderefs that will be used to sort the list 
+of options generated for a C<has_a>, C<has_many>, or C<might_have> field. 
+
+The coderef will be passed pairs of options arrayrefs, and should return the standard Perl sort 
+codes (i.e. -1, 0, or 1). The first item in each arrayref is the value of the option, the second 
+is the label.
+
+Note that the coderef should be prototyped ($$):
+
+    # sort by label, alphabetically
+    $field_name => sub ($$) { $_[0]->[1] cmp $_[1]->[1] }
+
+    # sort by value, numerically
+    $field_name => sub ($$) { $_[0]->[0] <=> $_[1]->[0] }
+
+=back
 
 Note that parameter merging is likely to become more sophisticated in future releases 
 (probably copying the argument merging code from L<CGI::FormBuilder|CGI::FormBuilder> 
@@ -1421,6 +1445,12 @@ sub _get_args
     my $pre_process2 = delete( $args_in{process_fields} ) || {};
     my %pre_process  = ( %$pre_process1, %$pre_process2 );
     
+    # merge sorters and remove from %args_in (although note that any default sorters will still 
+    # be present in %args)
+    my %options_sorters = ( %{ $them->form_builder_defaults->{options_sorters} || {} }, 
+                            %{ delete( $args_in{options_sorters} ) || {} },
+                            );
+    
     my %args = ( %{ $them->form_builder_defaults }, %args_in );
     
     $args{process_fields} = \%pre_process;
@@ -1467,6 +1497,7 @@ sub _get_args
     my $orig = { fields => $original_fields,
                  %post_process,
                  process_extras => $process_extras,
+                 options_sorters => \%options_sorters,
                  };
     
     return $orig, %args;
@@ -1474,13 +1505,13 @@ sub _get_args
 
 sub _make_form
 {
-    my ( $me, $them, $orig, %args ) = @_;
+    my ($me, $them, $orig, %args) = @_;
     
     my $pre_process = delete( $args{process_fields} ) || {};
     
-    my %clean_args = $me->_stringify_args( %args );
+    my %clean_args = $me->_stringify_args(%args);
     
-    my $form = CGI::FormBuilder->new( %clean_args );
+    my $form = CGI::FormBuilder->new(%clean_args);
     
     $form->{__cdbi_original_args__} = $orig;
     
@@ -1489,7 +1520,7 @@ sub _make_form
     {
         my $form_modify = "form_$modify";
         
-        $me->$form_modify( $them, $form, $pre_process );
+        $me->$form_modify($them, $form, $pre_process);
     }
     
     return $form;
@@ -1863,38 +1894,36 @@ If the relationship is to a non-CDBI class, loads a plugin to handle the field (
 
 sub form_has_a
 {
-    my ( $me, $them, $form, $pre_process ) = @_;
+    my ($me, $them, $form, $pre_process) = @_;
     
-    my $meta = $them->meta_info( 'has_a' ) || return;
+    my $meta = $them->meta_info('has_a') || return;
     
-    # warn "has_a meta: " . Dumper( $meta );
+    my @haves = map { $them->find_column($_) } keys %$meta;
     
-    my @haves = map { $them->find_column( $_ ) } keys %$meta;
-    
-    foreach my $field ( @haves ) 
+    foreach my $field (@haves) 
     {
         next unless exists $form->field->{ $field->mutator };
         
         # if a custom field processor has been supplied, use that
         my $processor = $pre_process->{ $field->mutator };
-        $me->_process_field( $them, $form, $field, $processor ) if $processor;
+        $me->_process_field($them, $form, $field, $processor) if $processor;
         next if $processor;        
         
-        my ( $related_class, undef ) = $me->table_meta( $them )->related_class_and_rel_type( $field );
+        my ($related_class, undef) = $me->table_meta($them)->related_class_and_rel_type($field);
         
-        if ( $related_class->isa( 'Class::DBI' ) ) 
+        if ( $related_class->isa('Class::DBI') ) 
         {
-            my $options = $me->_field_options( $them, $form, $field ) || 
+            my $options = $me->_field_options($them, $form, $field) || 
                 die "No options detected for field '$field'";
                 
-            my ( $related_object, $value );
+            my ($related_object, $value);
             
-            if ( ref $them )
+            if (ref $them)
             {
                 my $accessor = $field->accessor;
                 $related_object = $them->$accessor || die sprintf 
                 'Failed to retrieve a related object from %s has_a field %s - inconsistent db?',
-                    ref( $them ), $accessor;
+                    ref $them, $accessor;
                     
                 my $pk = $related_object->primary_column;
                     
@@ -1913,9 +1942,9 @@ sub form_has_a
                         
             # if the class is not in its own file, require will not find it, 
             # even if it has been loaded
-            if ( eval { $class->can( 'field' ) } or $class->require )
+            if ( eval { $class->can('field') } or $class->require )
             {
-                $class->field( $them, $form, $field );
+                $class->field($me, $them, $form, $field);
             }
 #            elsif ( $@ =~ // ) XXX
 #            {
@@ -2109,33 +2138,48 @@ sub _field_options
         push @options, [ $object->$pk, ''.$object ]; 
     }
     
+    if ( my $sorter = $me->_get_options_sorter( $them, $form, $field ) )
+    {
+        @options = sort $sorter @options;
+    }
+    
     return \@options;
+}
+
+sub _get_options_sorter
+{
+    my ( $me, $them, $form, $field ) = @_;
+
+    # this href is a merge between the original args, and form_builder_defaults
+    my $sorter = $form->__cdbi_original_args__->{options_sorters}->{$field};
+                    
+    return $sorter;
 }
 
 =item form_timestamp
 
 Makes timestamp columns read only, since they will be set by the database.
 
-The default is to use the C<TIMESTAMP> processor, which in turn points to the C<DISABLED> 
-processor, which sets the HTML C<disabled> attribute. This makes the field data un-selectable. 
+The default is to use the C<TIMESTAMP> processor, which in turn points to the C<READONLY> 
+processor, which sets the HTML C<readonly> attribute. 
 
-If you prefer, you can replace the C<TIMESTAMP> processor with one that points to C<READONLY> instead.
+If you prefer, you can replace the C<TIMESTAMP> processor with one that points to C<DISABLED> instead.
 
 =cut
 
 sub form_timestamp
 {
-    my ( $me, $them, $form, $pre_process ) = @_;
+    my ($me, $them, $form, $pre_process) = @_;
     
-    foreach my $field ( $them->columns( 'All' ) )
+    foreach my $field ( $them->columns('All') )
     {
         next unless exists $form->field->{ $field->mutator };
     
-        next unless $me->table_meta( $them )->column_deep_type( $field->name ) eq 'timestamp';
+        next unless $me->table_meta($them)->column_deep_type( $field->name ) eq 'timestamp';
     
-        my $process = $me->_add_processors( $field, $pre_process, 'TIMESTAMP' ); 
+        my $process = $me->_add_processors($field, $pre_process, 'TIMESTAMP'); 
         
-        $me->_process_field( $them, $form, $field, $process );
+        $me->_process_field($them, $form, $field, $process);
     }
 }
 

@@ -1,12 +1,12 @@
 ---
 name: Class-DBI-FormBuilder
-version: 0.46
+version: 0.47
 author:
   - David Baird <cpan@riverside-cms.co.uk>
 abstract: Class::DBI/CGI::FormBuilder integration
 license: perl
 requires:
-  CGI::FormBuilder: 0
+  CGI::FormBuilder: 3
   Class::DBI: 0
   Class::Data::Inheritable: 0
   List::Util: 0
@@ -16,7 +16,7 @@ requires:
 provides:
   Class::DBI::FormBuilder:
     file: lib/Class/DBI/FormBuilder.pm
-    version: 0.46
+    version: 0.47
   Class::DBI::FormBuilder::Meta::Column:
     file: lib/Class/DBI/FormBuilder/Meta/Column.pm
   Class::DBI::FormBuilder::Meta::Table:
