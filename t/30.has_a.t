@@ -1,5 +1,4 @@
-
-
+#!/usr/bin/perl
 use strict;
 use warnings;
 
@@ -39,10 +38,11 @@ my $html_from_object = $form_from_object->render;
 # This was failing in first version, due to testing for $form->field( name => $field ); 
 # instead of the existence of the field (the former returns its value, which is empty 
 # in classes)
-like( $html_from_class, qr(<select id="town" name="town"><option value="">-select-</option><option value="1">Trumpton</option><option value="2">Uglyton</option><option value="3">Toonton</option><option value="4">London</option></select>), 'finding has_a rels' );
+diag("SQLite is typeless, hence n/a options (all columns are nullable)");
+like( $html_from_class, qr(<select id="town" name="town"><option value="">-select-</option><option>n/a</option><option value="1">Trumpton</option><option value="2">Uglyton</option><option value="3">Toonton</option><option value="4">London</option></select>), 'finding has_a rels' );
 
 # select, option 1 selected
-like( $html_from_object, qr(<select id="town" name="town"><option value="">-select-</option><option selected="selected" value="1">Trumpton</option><option value="2">Uglyton</option><option value="3">Toonton</option><option value="4">London</option></select>), 'finding has_a rels' );
+like( $html_from_object, qr(<select id="town" name="town"><option value="">-select-</option><option>n/a</option><option selected="selected" value="1">Trumpton</option><option value="2">Uglyton</option><option value="3">Toonton</option><option value="4">London</option></select>), 'finding has_a rels' );
 
 
 #use Data::Dumper;

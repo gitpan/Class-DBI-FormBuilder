@@ -6,4 +6,4 @@ BEGIN {
 use_ok( 'Class::DBI::FormBuilder' );
 }
 
-diag( "Testing Class::DBI::FormBuilder $Class::DBI::FormBuilder::VERSION, Perl 5.008006, /usr/local/bin/perl" );
+diag( "Testing Class::DBI::FormBuilder $Class::DBI::FormBuilder::VERSION, Perl $], $^X" );

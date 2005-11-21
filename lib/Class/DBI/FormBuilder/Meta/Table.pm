@@ -25,6 +25,27 @@ Access to column metadata.
 
 =item instance( $cdbi, %args )
 
+Returns an instance for the C<$cdbi> class (C<$cdbi> can be a class name or object). 
+
+The C<%args> hash is optional. Keys can be C<catalog> and C<schema>, which are also 
+available as accessors. Both default to C<undef>.
+
+=item catalog
+
+Get/set the catalog.
+
+=item schema
+
+Get/set the schema.
+
+=item dbh
+
+Get/set the DBI database handle (you probably don't want to set it).
+
+=item cdbi_class
+
+Get/set the CDBI class (you probably don't want to set it).
+
 =cut
 
 {
@@ -42,13 +63,13 @@ Access to column metadata.
         
         my $cdbi_class = ref $cdbi || $cdbi;
         
-        return $Instances{ $cdbi_class } if $Instances{ $cdbi_class };
+        return $Instances{$cdbi_class} if $Instances{$cdbi_class};
         
         # first time - build a new object
         
         my $self = bless { _columns_hash => {} }, ref $proto || $proto;
         
-        $self->cdbi_class( $cdbi_class );
+        $self->cdbi_class($cdbi_class);
         
         $self->dbh( $cdbi_class->db_Main );
         
@@ -104,8 +125,8 @@ sub _load_typeless_meta
     # see 'Statement Handle Attributes' in the DBI docs for a list of available attributes
     my $cols  = $sth->{NAME};
     my $types = $sth->{TYPE};
-    # my $sizes = $sth->{PRECISION};    empty
-    # my $nulls = $sth->{NULLABLE};     empty
+    # my $sizes = $sth->{PRECISION};    # empty
+    # my $nulls = $sth->{NULLABLE};     # empty
     
     # we haven't actually fetched anything from the sth, so need to tell DBI we're not going to
     $sth->finish;
@@ -140,20 +161,20 @@ sub _fixup_type
 
 sub _load_type_meta
 {
-    my ( $self, $sth ) = @_;
+    my ($self, $sth) = @_;
     
     while ( my $row = $sth->fetchrow_hashref )
     {
-        my ( $meta, $col_name );
+        my ($meta, $col_name);
         
         foreach my $key ( @{ Class::DBI::FormBuilder::Meta::Column->column_attributes } )
         {
-            my $value = $row->{ $key } || $row->{ uc $key };
-            $meta->{ $key } = $value;
+            my $value = $row->{$key} || $row->{ uc $key };
+            $meta->{$key} = $value;
             $col_name = $row->{COLUMN_NAME} || $row->{column_name};
         }
         
-        $self->_add_column( $col_name, $meta );    
+        $self->_add_column($col_name, $meta);    
     }
 }
 
@@ -161,10 +182,13 @@ sub _add_column
 {
     my ( $self, $name, $meta ) = @_;
     
-    $self->_columns_hash->{ $name } = Class::DBI::FormBuilder::Meta::Column->new( $self, $name, $meta );
+    $self->_columns_hash->{$name} = Class::DBI::FormBuilder::Meta::Column->new($self, $name, $meta);
 }
 
-=item column_deep_type
+=item column_deep_type( $field )
+
+Returns the type of the field. If C<$field> refers to a relationship (e.g. C<has_many> or  
+C<might_have>), returns the type of the column in the related table.
 
 =cut
 
@@ -172,36 +196,36 @@ sub _add_column
 # another table, in which case, the type of the column in that table is returned
 sub column_deep_type
 {
-    my ( $self, $field ) = @_;
+    my ($self, $field) = @_;
     
-    Carp::croak "Must supply a column name - got a ref - '$field' " . ref( $field ) if ref $field;
+    Carp::croak "Must supply a column name - got a ref - '$field' " . ref($field) if ref $field;
     
     my $them = $self->cdbi_class;
     
-    my $column = $self->column( $field );
+    my $column = $self->column($field);
     
     return $column->type if $column;
     
     # no such column - must be a related accessor
     
-    my ( $other, $rel_type ) = $self->related_class_and_rel_type( $field );
+    my ($other, $rel_type) = $self->related_class_and_rel_type($field);
     
     Carp::croak "Non-existent column '$field' in '$them' is not related to anything" unless $other;
     
-    my $meta = $them->meta_info( $rel_type, $field );
+    my $meta = $them->meta_info($rel_type, $field);
     
     my $fk = $meta->{args}->{foreign_key};
     
-    my $other_meta = $self->instance( $other );
+    my $other_meta = $self->instance($other);
     
-    my $type = $other_meta->column( $fk )->type if $fk;            
+    my $type = $other_meta->column($fk)->type if $fk;            
 
     die "No type detected for column '$field' in '$them' or column '$fk' in '$other'" unless $type;
     
     return $type;
 }
 
-=item related_class_and_rel_type
+=item related_class_and_rel_type( $field )
 
 =cut 
 
@@ -241,47 +265,37 @@ sub related_class_and_rel_type
         $related_class = $related_meta->foreign_class;
     }
     
-    return ( $related_class, $rel_type );    
+    return ($related_class, $rel_type);    
 }
 
 =item column( $col_name )
 
 If C<$col_name> is a column in this class, returns a L<Class::DBI::FormBuilder::Meta::Column> 
-object for that column. 
-
-If C<$col_name> is a C<has_many> accessor, 
+object for that column. Otherwise, returns C<undef>. 
 
 =cut
 
 # returns a CDBI::FB::Meta::Column object or undef - e.g. if asked for a has_many field
+# note: column_deep_type relies on the undef for related columns
 sub column
 {
-    my ( $self, $col_name ) = @_;
+    my ($self, $col_name) = @_;
     
     my $h = $self->_columns_hash;
     
     Carp::croak "meta not loaded" unless $h;
     
     return $h->{ $col_name };
-    
-#    # no such column in this class - maybe it's a has_many field
-#    my ( $fclass, undef ) = $self->related_class_and_rel_type( $col_name );
-#    
-#    Carp::croak sprintf( "Can't find column '%s' in this class (%s), not via related_class_and_rel_type",
-#        $col_name, $self->cdbi_class ) unless $fclass;
-#        
-#    # examine the table meta for $fclass
-#    return $self->instance( $fclass )->column( $col_name );        
 }
 
-=item columns
+=item columns()
+
+Returns L<Class::DBI::Column> objects, in the same order as defined in the database.
 
 =back
 
 =cut
 
-
-# returns CDBI::Column objects, in db order
 sub columns
 {
     my ( $self, $group ) = @_;

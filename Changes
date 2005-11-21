@@ -1,5 +1,12 @@
 Revision history for Class-DBI-FormBuilder
 
+0.48    Mon  21 Nov, 2005 22:00
+        - removed deprecated table/column metainfo methods - go via table_meta() instead
+        - detect nullable columns in form_has_a() and don't make the column required 
+            if nullable
+        - add a 'n/a' option in _field_options() if the field is nullable
+        - altered use constant usage to work with Perl 5.6.1 (Barbie) 
+        - fixed diag message in 00-load.t (Barbie)
 
 0.47    Mon  26 Sept, 2005 10:40
         - new 'options_sorters' argument - a hashref, keyed by field name, with values 

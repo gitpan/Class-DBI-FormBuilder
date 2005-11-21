@@ -36,31 +36,37 @@ Access to column metadata.
 
 =over 4
 
-=item new
+=item new($table, $name, $meta)
+
+Returns a new meta object for the column. 
+
+Stringifies to the column's C<name>.
 
 =cut
 
 sub new
 {
-    my ( $proto, $table, $name, $meta ) = @_;
+    my ($proto, $table, $name, $meta) = @_;
     
     my $self = bless { table => $table, # reference to table meta object
                        name  => $name,
                        %$meta,
-                       }, ref( $proto ) || $proto;    
+                       }, ref($proto) || $proto;    
                        
     return $self;
 }
 
-=item name 
-
 =item table
+
+Returns the L<Class::DBI::FormBuilder::Table> object associated with this column. 
 
 =back
 
 =head2 Column attribute accessors
 
 =over 4
+
+=item name 
 
 =item order
 
@@ -90,16 +96,16 @@ Alias for C<default>.
 
 =item is_nullable  
                                                           
-=item mysql_values       
-
-=item mysql_type_name
-
 =item type
 
 =item type_name
 
 Alias for C<type>.
                                                             
+=item mysql_values       
+
+=item mysql_type_name
+
 =cut
 
 sub type
@@ -120,11 +126,13 @@ Currently only implemented for MySQL C<enum> (multiple is false) and
 C<set> (multiple is true) column types, but should be easy to support 
 other databases that offer similar column types.
 
+=back
+
 =cut
 
 sub options
 {
-    my ( $self ) = @_;
+    my ($self) = @_;
     
     my $type = $self->type;
     
@@ -132,16 +140,9 @@ sub options
     
     my $multiple = 1 if $type eq 'set';
     
-#    use Data::Dumper;
-#    warn sprintf "Column %s in %s is type '%s' with value(s): %s\n", 
-#        $self->name, $self->table->cdbi_class, $type, Dumper( $series );
-    
     return $series, $multiple;   
 }
 
-=back
-
-=cut
 
 1;
 
