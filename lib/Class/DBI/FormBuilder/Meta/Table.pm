@@ -79,6 +79,8 @@ Get/set the CDBI class (you probably don't want to set it).
         
         $self->_load_meta;
         
+        $Instances{$cdbi_class} = $self;
+        
         return $self;
     }
 }

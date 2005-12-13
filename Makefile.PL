@@ -2,18 +2,19 @@
 use ExtUtils::MakeMaker;
 WriteMakefile
 (
+          'PL_FILES' => {},
+          'INSTALLDIRS' => 'site',
           'NAME' => 'Class::DBI::FormBuilder',
           'VERSION_FROM' => 'lib/Class/DBI/FormBuilder.pm',
           'PREREQ_PM' => {
-                           'CGI::FormBuilder' => '3',
-                           'Class::DBI' => '0',
-                           'Class::Data::Inheritable' => '0',
-                           'List::Util' => '0',
-                           'Test::Exception' => '0',
-                           'Test::More' => '0',
-                           'UNIVERSAL::require' => '0'
-                         },
-          'INSTALLDIRS' => 'site',
-          'PL_FILES' => {}
+                           'Test::More' => 0,
+                           'List::Util' => 0,
+                           'CGI::FormBuilder' => 3,
+                           'Test::Exception' => 0,
+                           'Class::DBI::AbstractSearch' => 0,
+                           'Class::Data::Inheritable' => 0,
+                           'Class::DBI' => 0,
+                           'UNIVERSAL::require' => 0
+                         }
         )
 ;

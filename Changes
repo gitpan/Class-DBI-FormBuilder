@@ -1,5 +1,9 @@
 Revision history for Class-DBI-FormBuilder
 
+0.481   Mon 12 Dec, 2005 23:23
+        - store instance in CDBI::FB::Meta::Table::instance(), to make the instance() 
+            method work efficiently (Brendan Bank)
+
 0.48    Mon  21 Nov, 2005 22:00
         - removed deprecated table/column metainfo methods - go via table_meta() instead
         - detect nullable columns in form_has_a() and don't make the column required 
