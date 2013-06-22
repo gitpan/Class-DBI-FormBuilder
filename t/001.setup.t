@@ -85,11 +85,11 @@ foreach my $town ( @towns )
     Town->create( \%data );
 }
 
-Alias->create( { colour => 'green', 
+CDBIFB::Alias->create( { colour => 'green', 
                  fruit  => 'apple',
                  town   => 1,
                  } ); 
-Alias->create( { colour => 'yellow', 
+CDBIFB::Alias->create( { colour => 'yellow', 
                  fruit  => 'banana',
                  town   => 2,
                  } ); 
@@ -144,7 +144,7 @@ $VAR1 = {
                      },
           'has_many' => {
                           'toys' => bless( {
-                                             'foreign_class' => 'Toy',
+                                             'foreign_class' => 'CDBIFB::Toy',
                                              'name' => 'has_many',
                                              'args' => {
                                                          'mapping' => [],

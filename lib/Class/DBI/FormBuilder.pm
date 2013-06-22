@@ -18,7 +18,7 @@ use constant COLUMN => 4;
 
 use base 'Class::Data::Inheritable';
 
-our $VERSION = '0.482';
+our $VERSION = '0.483';
 
 # process_extras *must* come 2nd last 
 our @BASIC_FORM_MODIFIERS = qw( pks options file timestamp text process_extras final );

@@ -16,7 +16,7 @@ plan tests => 4;
 use Class::DBI::FormBuilder::DBI::Test; 
 
 {
-    my $apple = Alias->retrieve( 1 );
+    my $apple = CDBIFB::Alias->retrieve( 1 );
     
     isa_ok( $apple, 'Class::DBI' );
     

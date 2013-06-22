@@ -31,7 +31,7 @@ SKIP: {
                  };
                  
                  
-    my $form = Alias->as_form;
+    my $form = CDBIFB::Alias->as_form;
     
     ok( $form->submitted, 'form submitted' );
     
@@ -42,7 +42,7 @@ SKIP: {
     
     my $orange;
      
-    lives_ok { $orange = Alias->create_from_form( $form ) };
+    lives_ok { $orange = CDBIFB::Alias->create_from_form( $form ) };
     
     # this fails ($orange is undefined) because the form data are keyed by column name, 
     # but need to be sent to CDBI keyed by mutator name

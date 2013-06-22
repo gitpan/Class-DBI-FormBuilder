@@ -30,7 +30,7 @@ foreach my $toy ( @toys )
     @data{ qw( name person descr ) } = @$toy;
     #use Data::Dumper;
     #warn Dumper( \%data );
-    Toy->create( \%data );
+    CDBIFB::Toy->create( \%data );
 }
 
 # -----

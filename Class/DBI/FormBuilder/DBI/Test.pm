@@ -27,12 +27,12 @@
 {   # has_many
     # this one must be declared before Person, because Person will 
     # examine the has_a in Toy when setting up its has_many toys.
-    package Toy;
+    package CDBIFB::Toy;
     use base 'Class::DBI::FormBuilder::DBI::Test';
-    Toy->table('toy');
-    Toy->columns( All => qw/id person name descr/ );
-    Toy->columns( Stringify => qw/name/ );
-    Toy->has_a( person => 'Person' );
+    CDBIFB::Toy->table('toy');
+    CDBIFB::Toy->columns( All => qw/id person name descr/ );
+    CDBIFB::Toy->columns( Stringify => qw/name/ );
+    CDBIFB::Toy->has_a( person => 'Person' );
 }
 
 {    
@@ -43,7 +43,7 @@
     Person->columns(All => qw/id name town street/);
     Person->columns(Stringify => qw/name/);
     Person->has_a( town => 'Town' );
-    Person->has_many( toys => 'Toy' );
+    Person->has_many( toys => 'CDBIFB::Toy' );
     Person->might_have( job => Job => qw/jobtitle employer salary/ );
 }
 
@@ -57,16 +57,16 @@
 }
 
 {
-    package Alias;
+    package CDBIFB::Alias;
     use base 'Class::DBI::FormBuilder::DBI::Test';
-    Alias->table( 'alias' );
-    Alias->columns(All => qw/id colour fruit town/);
-    Alias->columns(Stringify => 'fruit' );
+    CDBIFB::Alias->table( 'alias' );
+    CDBIFB::Alias->columns(All => qw/id colour fruit town/);
+    CDBIFB::Alias->columns(Stringify => 'fruit' );
     
-    Alias->has_a( town => 'Town' );
+    CDBIFB::Alias->has_a( town => 'Town' );
     
-    Alias->has_many( alias_has_many => 'AliasHasMany' );
-    Alias->might_have( job => Job => qw/jobtitle employer salary/ );
+    CDBIFB::Alias->has_many( alias_has_many => 'AliasHasMany' );
+    CDBIFB::Alias->might_have( job => Job => qw/jobtitle employer salary/ );
     
     
     sub accessor_name { "get_$_[1]" } # deprecated somewhere
@@ -81,7 +81,7 @@
     AliasHasMany->table( 'alias_has_many' );
     AliasHasMany->columns( All => qw/id alias foo/ );
     AliasHasMany->columns( Stringify => 'foo' );
-    AliasHasMany->has_a( alias => 'Alias' );
+    AliasHasMany->has_a( alias => 'CDBIFB::Alias' );
 }    
     
     

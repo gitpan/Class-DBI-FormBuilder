@@ -1,6 +1,6 @@
 Revision history for Class-DBI-FormBuilder
 
-0.482   Thu 23 May, 2013 10:42
+0.483   Thu 22 June, 2013 19:19
 				- moved DBI::Test to Class::DBI::FormBuilder::DBI::Test to free up the namespace
 
 0.481   Mon 12 Dec, 2005 23:23
