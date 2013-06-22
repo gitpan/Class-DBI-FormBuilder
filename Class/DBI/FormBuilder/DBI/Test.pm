@@ -1,14 +1,14 @@
 {
-    package DBI::Test;
+    package Class::DBI::FormBuilder::DBI::Test;
     use base 'Class::DBI';
     use Class::DBI::FormBuilder PrettyPrint => 1;
     # use the db set up in 01.create.t
-    DBI::Test->set_db("Main", "dbi:SQLite2:dbname=test.db");
+    Class::DBI::FormBuilder::DBI::Test->set_db("Main", "dbi:SQLite2:dbname=test.db");
 }
 
 {   # might_have
     package Job;
-    use base 'DBI::Test';
+    use base 'Class::DBI::FormBuilder::DBI::Test';
     Job->table( 'job' );
     Job->columns( All => qw/id person jobtitle employer salary/ );
     Job->columns( Stringify => qw/jobtitle/ );  
@@ -17,7 +17,7 @@
  
 {   # has_a
     package Town;
-    use base 'DBI::Test';
+    use base 'Class::DBI::FormBuilder::DBI::Test';
     #Town->form_builder_defaults( { smartness => 3 } );
     Town->table("town");
     Town->columns(All => qw/id name pop lat long country/);
@@ -28,7 +28,7 @@
     # this one must be declared before Person, because Person will 
     # examine the has_a in Toy when setting up its has_many toys.
     package Toy;
-    use base 'DBI::Test';
+    use base 'Class::DBI::FormBuilder::DBI::Test';
     Toy->table('toy');
     Toy->columns( All => qw/id person name descr/ );
     Toy->columns( Stringify => qw/name/ );
@@ -37,7 +37,7 @@
 
 {    
     package Person;
-    use base 'DBI::Test';
+    use base 'Class::DBI::FormBuilder::DBI::Test';
     #Person->form_builder_defaults( { smartness => 3 } );
     Person->table("person");
     Person->columns(All => qw/id name town street/);
@@ -49,7 +49,7 @@
 
 {    
     package Wackypk;
-    use base 'DBI::Test';
+    use base 'Class::DBI::FormBuilder::DBI::Test';
     Wackypk->table("wackypk");
     # wooble is the pk
     Wackypk->columns(All => qw/flooble wooble flump poo/);
@@ -58,7 +58,7 @@
 
 {
     package Alias;
-    use base 'DBI::Test';
+    use base 'Class::DBI::FormBuilder::DBI::Test';
     Alias->table( 'alias' );
     Alias->columns(All => qw/id colour fruit town/);
     Alias->columns(Stringify => 'fruit' );
@@ -69,13 +69,15 @@
     Alias->might_have( job => Job => qw/jobtitle employer salary/ );
     
     
-    sub accessor_name { "get_$_[1]" }
-    sub mutator_name  { "set_$_[1]" }
+    sub accessor_name { "get_$_[1]" } # deprecated somewhere
+    sub mutator_name  { "set_$_[1]" } # deprecated somewhere
+    sub accessor_name_for { "get_$_[1]" }
+    sub mutator_name_for  { "set_$_[1]" }
 }
 
 {
     package AliasHasMany;
-    use base 'DBI::Test';
+    use base 'Class::DBI::FormBuilder::DBI::Test';
     AliasHasMany->table( 'alias_has_many' );
     AliasHasMany->columns( All => qw/id alias foo/ );
     AliasHasMany->columns( Stringify => 'foo' );

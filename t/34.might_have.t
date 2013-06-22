@@ -13,7 +13,7 @@ if ( ! DBD::SQLite2->require )
 
 plan tests => 7;
 
-use DBI::Test; 
+use Class::DBI::FormBuilder::DBI::Test; 
 
 
 $ENV{REQUEST_METHOD} = 'GET';
@@ -66,11 +66,11 @@ my $html = $form->render;
 
 like( $html, qr(job) );
 
-like( $html, qr(<select id="job" name="job"><option value="">-select-</option><option selected="selected" value="1">Dogs Body</option><option value="2">Dogs Body 2</option><option value="3">Dogs Body 3</option><option value="4">Dogs Body 4</option><option value="5">Dogs Body 5</option><option value="6">Dogs Body 6</option><option value="7">Dogs Body 7</option><option value="8">Dogs Body 8</option><option value="9">Dogs Body 9</option><option value="10">Dogs Body 10</option></select>), 'finding might_have rels' );
+like( $html, qr(<select id="job" name="job">\s*<option value="">-select-</option>\s*<option selected="selected" value="1">Dogs Body</option>\s*<option value="2">Dogs Body 2</option>\s*<option value="3">Dogs Body 3</option>\s*<option value="4">Dogs Body 4</option>\s*<option value="5">Dogs Body 5</option>\s*<option value="6">Dogs Body 6</option>\s*<option value="7">Dogs Body 7</option>\s*<option value="8">Dogs Body 8</option>\s*<option value="9">Dogs Body 9</option>\s*<option value="10">Dogs Body 10</option>\s*</select>), 'finding might_have rels' );
 
 my $class_form_html = Person->as_form( selectnum => 2 )->render;
 
-like( $class_form_html, qr(<select id="job" name="job"><option value="">-select-</option><option value="1">Dogs Body</option><option value="2">Dogs Body 2</option><option value="3">Dogs Body 3</option><option value="4">Dogs Body 4</option><option value="5">Dogs Body 5</option><option value="6">Dogs Body 6</option><option value="7">Dogs Body 7</option><option value="8">Dogs Body 8</option><option value="9">Dogs Body 9</option><option value="10">Dogs Body 10</option></select>) );
+like( $class_form_html, qr(<select id="job" name="job">\s*<option value="">-select-</option>\s*<option value="1">Dogs Body</option>\s*<option value="2">Dogs Body 2</option>\s*<option value="3">Dogs Body 3</option>\s*<option value="4">Dogs Body 4</option>\s*<option value="5">Dogs Body 5</option>\s*<option value="6">Dogs Body 6</option>\s*<option value="7">Dogs Body 7</option>\s*<option value="8">Dogs Body 8</option>\s*<option value="9">Dogs Body 9</option>\s*<option value="10">Dogs Body 10</option>\s*</select>) );
 
 
 

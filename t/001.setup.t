@@ -14,16 +14,16 @@ plan tests => 1;
 
 BEGIN { unlink 'test.db' };
 
-use DBI::Test;
+use Class::DBI::FormBuilder::DBI::Test;
 
-DBI::Test->db_Main->do("CREATE TABLE person (
+Class::DBI::FormBuilder::DBI::Test->db_Main->do("CREATE TABLE person (
     id integer not null primary key,
     name varchar(255),
     town integer,
     street varchar(255)        
 );");
 
-DBI::Test->db_Main->do("CREATE TABLE town (
+Class::DBI::FormBuilder::DBI::Test->db_Main->do("CREATE TABLE town (
     id integer not null primary key,
     name varchar,
     pop integer,
@@ -32,7 +32,7 @@ DBI::Test->db_Main->do("CREATE TABLE town (
     country text
 );");
 
-DBI::Test->db_Main->do("CREATE TABLE toy (
+Class::DBI::FormBuilder::DBI::Test->db_Main->do("CREATE TABLE toy (
     id integer not null primary key,
     name varchar,
     person integer,
@@ -40,7 +40,7 @@ DBI::Test->db_Main->do("CREATE TABLE toy (
 );");
 
 # id person jobtitle employer salary
-DBI::Test->db_Main->do("CREATE TABLE job (
+Class::DBI::FormBuilder::DBI::Test->db_Main->do("CREATE TABLE job (
     id integer not null primary key,
     person integer,
     jobtitle text,
@@ -49,21 +49,21 @@ DBI::Test->db_Main->do("CREATE TABLE job (
 );");
 
 # 
-DBI::Test->db_Main->do("CREATE TABLE wackypk (
+Class::DBI::FormBuilder::DBI::Test->db_Main->do("CREATE TABLE wackypk (
     wooble integer not null primary key,
     flooble integer,
     flump text,
     poo text
 );");
 
-DBI::Test->db_Main->do("CREATE TABLE alias (
+Class::DBI::FormBuilder::DBI::Test->db_Main->do("CREATE TABLE alias (
     id integer not null primary key,
     colour text,
     fruit text,
     town integer
 );");
 
-DBI::Test->db_Main->do("CREATE TABLE alias_has_many (
+Class::DBI::FormBuilder::DBI::Test->db_Main->do("CREATE TABLE alias_has_many (
     id integer not null primary key,
     alias integer,
     foo text

@@ -13,7 +13,7 @@ if ( ! DBD::SQLite2->require )
 
 plan tests => 8;
 
-use DBI::Test;
+use Class::DBI::FormBuilder::DBI::Test;
 
 {   # specify a subset of fields, and check the data sent to create a new object
 

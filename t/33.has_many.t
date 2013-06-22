@@ -12,7 +12,7 @@ if ( ! DBD::SQLite2->require )
 }
 
 plan tests => 2;
-use DBI::Test; 
+use Class::DBI::FormBuilder::DBI::Test; 
 
 
 $ENV{REQUEST_METHOD} = 'GET';
@@ -34,7 +34,7 @@ my $form = $dbaird->as_form( selectnum => 2 );
 
 my $html = $form->render;
 
-like( $html, qr(<select id="toys" multiple="multiple" name="toys"><option selected="selected" value="1">RedCar</option><option selected="selected" value="2">BlueBug</option><option selected="selected" value="3">GreenBlock</option><option value="4">YellowSub</option></select>), 'finding has_many rels' );
+like( $html, qr(<select id="toys" multiple="multiple" name="toys">\s*<option selected="selected" value="1">RedCar</option>\s*<option selected="selected" value="2">BlueBug</option>\s*<option selected="selected" value="3">GreenBlock</option>\s*<option value="4">YellowSub</option>\s*</select>), 'finding has_many rels' );
 
 
 

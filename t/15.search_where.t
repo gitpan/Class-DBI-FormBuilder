@@ -19,10 +19,10 @@ if ( ! Class::DBI::AbstractSearch->require )
 plan tests => 9;
 
 
-use DBI::Test; # also includes Bar
+use Class::DBI::FormBuilder::DBI::Test; # also includes Bar
 
 {
-    package DBI::Test;
+    package Class::DBI::FormBuilder::DBI::Test;
     use Class::DBI::AbstractSearch;
 }
 

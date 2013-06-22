@@ -12,7 +12,7 @@ if ( ! DBD::SQLite2->require )
 
 plan tests => 11;
 
-use DBI::Test;
+use Class::DBI::FormBuilder::DBI::Test;
 
 {
     # Fake a submission request

@@ -14,7 +14,7 @@ if ( ! require DBD::SQLite2 )
 
 #plan tests => 5;
 
-use DBI::Test; # also includes Bar
+use Class::DBI::FormBuilder::DBI::Test; # also includes Bar
 
 
 {

@@ -11,7 +11,7 @@ if ( ! DBD::SQLite2->require )
 }
 
 plan tests => 33;
-use DBI::Test; 
+use Class::DBI::FormBuilder::DBI::Test; 
 
 
 $ENV{REQUEST_METHOD} = 'GET';

@@ -13,7 +13,7 @@ if ( ! DBD::SQLite2->require )
 plan tests => 3;
 
 
-use DBI::Test; # also includes Bar
+use Class::DBI::FormBuilder::DBI::Test; # also includes Bar
 
 # The difference from 08 is the id= in the query string - this would be wrong, 
 # and results in the fatal error in the last test

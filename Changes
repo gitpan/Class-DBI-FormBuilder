@@ -1,5 +1,8 @@
 Revision history for Class-DBI-FormBuilder
 
+0.482   Thu 23 May, 2013 10:42
+				- moved DBI::Test to Class::DBI::FormBuilder::DBI::Test to free up the namespace
+
 0.481   Mon 12 Dec, 2005 23:23
         - store instance in CDBI::FB::Meta::Table::instance(), to make the instance() 
             method work efficiently (Brendan Bank)

@@ -13,7 +13,7 @@ if ( ! DBD::SQLite2->require )
 plan tests => 4;
 
 
-use DBI::Test; # also includes Bar
+use Class::DBI::FormBuilder::DBI::Test; # also includes Bar
 
 $ENV{REQUEST_METHOD} = 'GET';
 $ENV{QUERY_STRING}   = 'name=Winston&street=DowningStreet&town=4&_submitted=1';

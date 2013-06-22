@@ -12,7 +12,7 @@ if ( ! DBD::SQLite2->require )
 
 plan tests => 3;
 
-use DBI::Test; # also includes Bar
+use Class::DBI::FormBuilder::DBI::Test; # also includes Bar
 
 $ENV{REQUEST_METHOD} = 'GET';
 $ENV{QUERY_STRING}   = 'id=1&_submitted=1';
@@ -39,10 +39,10 @@ my $html_from_object = $form_from_object->render;
 # instead of the existence of the field (the former returns its value, which is empty 
 # in classes)
 diag("SQLite is typeless, hence n/a options (all columns are nullable)");
-like( $html_from_class, qr(<select id="town" name="town"><option value="">-select-</option><option>n/a</option><option value="1">Trumpton</option><option value="2">Uglyton</option><option value="3">Toonton</option><option value="4">London</option></select>), 'finding has_a rels' );
+like( $html_from_class, qr(<select id="town" name="town">\s*<option value="">-select-</option>\s*<option>n/a</option>\s*<option value="1">Trumpton</option>\s*<option value="2">Uglyton</option>\s*<option value="3">Toonton</option>\s*<option value="4">London</option>\s*</select>), 'finding has_a rels' );
 
 # select, option 1 selected
-like( $html_from_object, qr(<select id="town" name="town"><option value="">-select-</option><option>n/a</option><option selected="selected" value="1">Trumpton</option><option value="2">Uglyton</option><option value="3">Toonton</option><option value="4">London</option></select>), 'finding has_a rels' );
+like( $html_from_object, qr(<select id="town" name="town">\s*<option value="">-select-</option>\s*<option>n/a</option>\s*<option selected="selected" value="1">Trumpton</option>\s*<option value="2">Uglyton</option>\s*<option value="3">Toonton</option>\s*<option value="4">London</option>\s*</select>), 'finding has_a rels' );
 
 
 #use Data::Dumper;
